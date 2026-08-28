@@ -1,0 +1,1282 @@
+param(
+  [ValidateSet("Run", "Stop")]
+  [string]$Mode = "Run",
+  [switch]$ShowOnStart
+)
+
+$ErrorActionPreference = "Stop"
+
+if ($Mode -eq "Stop") {
+  $existingStopEvent = $null
+  try {
+    $existingStopEvent = [System.Threading.EventWaitHandle]::OpenExisting("Local\OpenCodexUsageTrayStop-v1")
+    [void]$existingStopEvent.Set()
+  } catch [System.Threading.WaitHandleCannotBeOpenedException] {
+    # No tray instance currently owns the stop event.
+  } finally {
+    if ($null -ne $existingStopEvent) { $existingStopEvent.Dispose() }
+  }
+  exit 0
+}
+
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Xaml
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne [System.Threading.ApartmentState]::STA) {
+  throw "OpenCodex Usage Tray must run in an STA PowerShell process. Use Windows PowerShell or add -STA."
+}
+
+$nativeTypeDefinition = @'
+using System;
+using System.Runtime.InteropServices;
+
+public struct OpenCodexWindowRect {
+  public int Left;
+  public int Top;
+  public int Right;
+  public int Bottom;
+}
+
+public static class OpenCodexFocusNative {
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool GetWindowRect(IntPtr window, out OpenCodexWindowRect rect);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetForegroundWindow(IntPtr window);
+
+  [DllImport("user32.dll")]
+  public static extern uint GetDpiForWindow(IntPtr window);
+}
+'@
+Add-Type -TypeDefinition $nativeTypeDefinition
+
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$providerPath = Join-Path $scriptRoot "status-provider.mjs"
+
+$stopEventCreated = $false
+$stopEvent = [System.Threading.EventWaitHandle]::new(
+  $false,
+  [System.Threading.EventResetMode]::AutoReset,
+  "Local\OpenCodexUsageTrayStop-v1",
+  [ref]$stopEventCreated
+)
+$showEventCreated = $false
+$showEvent = [System.Threading.EventWaitHandle]::new(
+  $false,
+  [System.Threading.EventResetMode]::AutoReset,
+  "Local\OpenCodexUsageTrayShow-v1",
+  [ref]$showEventCreated
+)
+
+$createdNew = $false
+$mutex = [System.Threading.Mutex]::new(
+  $true,
+  "Local\OpenCodexUsageTray-v1",
+  [ref]$createdNew
+)
+if (-not $createdNew) {
+  if ($ShowOnStart) { [void]$showEvent.Set() }
+  $showEvent.Dispose()
+  $stopEvent.Dispose()
+  $mutex.Dispose()
+  exit 0
+}
+
+$nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+if ($null -eq $nodeCommand) { $nodeCommand = Get-Command node -ErrorAction Stop }
+$nodePath = $nodeCommand.Source
+
+function Get-CodexDarkTheme {
+  $configPath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\config.toml"
+  try {
+    if ([System.IO.File]::Exists($configPath)) {
+      $configText = [System.IO.File]::ReadAllText($configPath)
+      $themeMatch = [regex]::Match(
+        $configText,
+        '(?m)^\s*appearanceTheme\s*=\s*"(system|light|dark)"\s*(?:#.*)?$',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+      )
+      if ($themeMatch.Success) {
+        $theme = $themeMatch.Groups[1].Value.ToLowerInvariant()
+        if ($theme -eq "light") { return $false }
+        if ($theme -eq "dark") { return $true }
+      }
+    }
+  } catch { }
+
+  try {
+    $personalize = Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -ErrorAction Stop
+    return [int]$personalize.AppsUseLightTheme -eq 0
+  } catch {
+    return $false
+  }
+}
+
+function Get-ThemePalette {
+  param([bool]$Dark)
+
+  $highContrast = [System.Windows.SystemParameters]::HighContrast
+  if ($highContrast) {
+    return @{
+      Root = if ($Dark) { "#FF111111" } else { "#FFFFFFFF" }
+      Card = if ($Dark) { "#FF1A1A1A" } else { "#FFFFFFFF" }
+      Segment = if ($Dark) { "#FF242424" } else { "#FFF1F1F1" }
+      ActiveSurface = if ($Dark) { "#FF222A31" } else { "#FFEFF5F7" }
+      ActiveButton = if ($Dark) { "#FF303B45" } else { "#FFE4EEF1" }
+      Text = if ($Dark) { "#FFFFFFFF" } else { "#FF000000" }
+      RowText = if ($Dark) { "#FFF1F1F1" } else { "#FF202020" }
+      Muted = if ($Dark) { "#FFD0D0D0" } else { "#FF505050" }
+      Dim = if ($Dark) { "#FFAAAAAA" } else { "#FF686868" }
+      Border = if ($Dark) { "#FFFFFFFF" } else { "#FF000000" }
+      Track = if ($Dark) { "#FF555555" } else { "#FFCCCCCC" }
+      Hover = if ($Dark) { "#FF3B3B3B" } else { "#FFE5E5E5" }
+      Pressed = if ($Dark) { "#FF4A4A4A" } else { "#FFD7D7D7" }
+      Accent = "#FF5EA9B5"
+      Green = "#FF42B883"
+      Amber = "#FFF1A340"
+      Red = "#FFEB6B6B"
+    }
+  }
+
+  if ($Dark) {
+    return @{
+      Root = "#F218181B"
+      Card = "#FF232327"
+      Segment = "#FF202024"
+      ActiveSurface = "#FF252D32"
+      ActiveButton = "#FF303A40"
+      Text = "#FFF5F5F6"
+      RowText = "#FFE1E1E5"
+      Muted = "#FFA7A7AF"
+      Dim = "#FF777780"
+      Border = "#FF343439"
+      Track = "#FF3B3B41"
+      Hover = "#FF333338"
+      Pressed = "#FF3D3D43"
+      Accent = "#FF64AAB5"
+      Green = "#FF48C78E"
+      Amber = "#FFF0AA45"
+      Red = "#FFEF7373"
+    }
+  }
+
+  return @{
+    Root = "#F7F8F8F9"
+    Card = "#FFFFFFFF"
+    Segment = "#FFF0F0F1"
+    ActiveSurface = "#FFF1F6F7"
+    ActiveButton = "#FFDDECEF"
+    Text = "#FF202023"
+    RowText = "#FF39393D"
+    Muted = "#FF696970"
+    Dim = "#FF898990"
+    Border = "#FFDADADD"
+    Track = "#FFE3E3E6"
+    Hover = "#FFE7E7E8"
+    Pressed = "#FFDCDCDD"
+    Accent = "#FF4F97A3"
+    Green = "#FF238A5B"
+    Amber = "#FFB76A08"
+    Red = "#FFC73D3D"
+  }
+}
+
+function New-WpfBrush {
+  param([string]$Color)
+  $mediaColor = [System.Windows.Media.ColorConverter]::ConvertFromString($Color)
+  $brush = [System.Windows.Media.SolidColorBrush]::new($mediaColor)
+  $brush.Freeze()
+  return $brush
+}
+
+function Format-CompactNumber {
+  param([double]$Value)
+  if ($Value -ge 1000000000) { return "{0:0.#}B" -f ($Value / 1000000000) }
+  if ($Value -ge 1000000) { return "{0:0.#}M" -f ($Value / 1000000) }
+  if ($Value -ge 1000) { return "{0:0.#}K" -f ($Value / 1000) }
+  return "{0:N0}" -f $Value
+}
+
+function Format-Percent {
+  param($Value)
+  if ($null -eq $Value) { return "--" }
+  return "{0:0}%" -f [double]$Value
+}
+
+function Format-Elapsed {
+  param($Milliseconds)
+  if ($null -eq $Milliseconds) { return "" }
+  $seconds = [Math]::Max(0, [Math]::Floor([double]$Milliseconds / 1000))
+  if ($seconds -lt 60) { return "${seconds}s" }
+  $minutes = [Math]::Floor($seconds / 60)
+  if ($minutes -lt 60) { return "${minutes}m" }
+  $hours = [Math]::Floor($minutes / 60)
+  if ($hours -lt 24) { return "${hours}h" }
+  return "$([Math]::Floor($hours / 24))d"
+}
+
+function Format-ResetCountdown {
+  param($UnixMilliseconds)
+  if ($null -eq $UnixMilliseconds) { return "reset unknown" }
+  try {
+    $resetTime = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$UnixMilliseconds)
+    $remaining = $resetTime - [DateTimeOffset]::UtcNow
+    if ($remaining.TotalSeconds -le 0) { return "resetting" }
+    if ($remaining.TotalDays -ge 1) { return "resets $([Math]::Floor($remaining.TotalDays))d $($remaining.Hours)h" }
+    if ($remaining.TotalHours -ge 1) { return "resets $([Math]::Floor($remaining.TotalHours))h $($remaining.Minutes)m" }
+    if ($remaining.TotalMinutes -ge 1) { return "resets $([Math]::Floor($remaining.TotalMinutes))m" }
+    return "resets <1m"
+  } catch {
+    return "reset unknown"
+  }
+}
+
+function Get-QuotaBrush {
+  param($Value)
+  if ($null -eq $Value) { return $window.Resources["DimBrush"] }
+  $percent = [double]$Value
+  if ($percent -ge 90) { return $window.Resources["RedBrush"] }
+  if ($percent -ge 75) { return $window.Resources["AmberBrush"] }
+  return $window.Resources["AccentBrush"]
+}
+
+$xaml = @'
+<Window
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  x:Name="PopupWindow"
+  Title="OpenCodex Usage"
+  Width="378"
+  SizeToContent="Height"
+  MaxHeight="520"
+  WindowStyle="None"
+  ResizeMode="NoResize"
+  AllowsTransparency="True"
+  Background="Transparent"
+  Opacity="1"
+  ShowInTaskbar="False"
+  ShowActivated="False"
+  Topmost="True"
+  WindowStartupLocation="Manual"
+  Left="-10000"
+  Top="-10000"
+  FontFamily="Segoe UI Variable Text, Segoe UI"
+  TextOptions.TextFormattingMode="Display"
+  SnapsToDevicePixels="True"
+  UseLayoutRounding="True">
+  <Window.Resources>
+    <SolidColorBrush x:Key="RootBrush" Color="#F7F8F8F9" />
+    <SolidColorBrush x:Key="CardBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="SegmentBrush" Color="#FFF0F0F1" />
+    <SolidColorBrush x:Key="ActiveSurfaceBrush" Color="#FFF1F6F7" />
+    <SolidColorBrush x:Key="ActiveButtonBrush" Color="#FFDDECEF" />
+    <SolidColorBrush x:Key="TextBrush" Color="#FF202023" />
+    <SolidColorBrush x:Key="RowTextBrush" Color="#FF39393D" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#FF696970" />
+    <SolidColorBrush x:Key="DimBrush" Color="#FF898990" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#FFDADADD" />
+    <SolidColorBrush x:Key="TrackBrush" Color="#FFE3E3E6" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#FFE7E7E8" />
+    <SolidColorBrush x:Key="PressedBrush" Color="#FFDCDCDD" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF4F97A3" />
+    <SolidColorBrush x:Key="GreenBrush" Color="#FF238A5B" />
+    <SolidColorBrush x:Key="AmberBrush" Color="#FFB76A08" />
+    <SolidColorBrush x:Key="RedBrush" Color="#FFC73D3D" />
+
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="IconButtonStyle" TargetType="Button">
+      <Setter Property="Width" Value="24" />
+      <Setter Property="Height" Value="24" />
+      <Setter Property="Margin" Value="2,0,0,0" />
+      <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="FontFamily" Value="Segoe UI Symbol" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="5">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource PressedBrush}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="SegmentButtonStyle" TargetType="Button">
+      <Setter Property="Height" Value="26" />
+      <Setter Property="Margin" Value="2" />
+      <Setter Property="Padding" Value="4,0" />
+      <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+      <Setter Property="Background" Value="{DynamicResource SegmentBrush}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="5">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource PressedBrush}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="QuotaProgressStyle" TargetType="ProgressBar">
+      <Setter Property="Height" Value="5" />
+      <Setter Property="Minimum" Value="0" />
+      <Setter Property="Maximum" Value="100" />
+      <Setter Property="Background" Value="{DynamicResource TrackBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ProgressBar">
+            <Grid ClipToBounds="True">
+              <Border Background="{TemplateBinding Background}" CornerRadius="2.5" />
+              <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="2.5" HorizontalAlignment="Left" />
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="AccountCardStyle" TargetType="Border">
+      <Setter Property="Height" Value="56" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+      <Setter Property="Padding" Value="8,6" />
+      <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+      <Setter Property="CornerRadius" Value="7" />
+    </Style>
+  </Window.Resources>
+
+  <Border x:Name="RootSurface" Background="{DynamicResource RootBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
+    <StackPanel>
+      <Grid Height="35">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Ellipse x:Name="ConnectionDot" Grid.Column="0" Width="7" Height="7" Margin="1,0,8,11" VerticalAlignment="Center" Fill="{DynamicResource DimBrush}" />
+        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+          <TextBlock Text="Usage" FontSize="14" FontWeight="SemiBold" Height="17" />
+          <TextBlock x:Name="ConnectionLabel" Text="Loading local usage..." FontSize="10" Foreground="{DynamicResource MutedBrush}" Height="14" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top">
+          <Button x:Name="DashboardButton" Content="&#x2197;" Style="{StaticResource IconButtonStyle}" ToolTip="Open full OpenCodex dashboard" AutomationProperties.Name="Open full OpenCodex dashboard" />
+          <Button x:Name="RefreshButton" Content="&#x21BB;" Style="{StaticResource IconButtonStyle}" ToolTip="Refresh usage and task status" AutomationProperties.Name="Refresh usage" />
+          <Button x:Name="CloseButton" Content="&#x00D7;" Style="{StaticResource IconButtonStyle}" ToolTip="Hide usage" AutomationProperties.Name="Hide usage" />
+        </StackPanel>
+      </Grid>
+
+      <Border Height="30" Margin="0,4,0,7" Background="{DynamicResource SegmentBrush}" CornerRadius="7" Padding="1">
+        <UniformGrid Rows="1" Columns="3">
+          <Button x:Name="SwitchButton1" Content="-" Style="{StaticResource SegmentButtonStyle}" Visibility="Collapsed" />
+          <Button x:Name="SwitchButton2" Content="-" Style="{StaticResource SegmentButtonStyle}" Visibility="Collapsed" />
+          <Button x:Name="SwitchButton3" Content="-" Style="{StaticResource SegmentButtonStyle}" Visibility="Collapsed" />
+        </UniformGrid>
+      </Border>
+
+      <StackPanel x:Name="AccountsPanel">
+        <Border x:Name="AccountCard1" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName1" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta1" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Grid Grid.Column="1" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue1" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="FiveBar1" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="FiveReset1" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+            <Grid Grid.Column="3" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue1" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="WeekBar1" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="WeekReset1" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Border x:Name="AccountCard2" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName2" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta2" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Grid Grid.Column="1" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue2" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="FiveBar2" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="FiveReset2" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+            <Grid Grid.Column="3" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue2" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="WeekBar2" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="WeekReset2" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Border x:Name="AccountCard3" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName3" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Grid Grid.Column="1" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue3" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="FiveBar3" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="FiveReset3" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+            <Grid Grid.Column="3" VerticalAlignment="Center">
+              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue3" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <ProgressBar x:Name="WeekBar3" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
+              <TextBlock x:Name="WeekReset3" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+            </Grid>
+          </Grid>
+        </Border>
+      </StackPanel>
+
+      <Grid Height="20" Margin="2,1,2,0">
+        <TextBlock Text="Tasks" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource DimBrush}" />
+        <TextBlock x:Name="FreshnessLabel" Text="waiting for data" FontSize="9.5" Foreground="{DynamicResource DimBrush}" HorizontalAlignment="Right" />
+      </Grid>
+
+      <StackPanel x:Name="TaskPanel">
+        <Grid x:Name="TaskRow1" Height="23" Visibility="Collapsed">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /><ColumnDefinition Width="54" /></Grid.ColumnDefinitions>
+          <Ellipse x:Name="TaskDot1" Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource DimBrush}" />
+          <TextBlock x:Name="TaskAccount1" Grid.Column="1" Text="-" FontSize="9.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTitle1" Grid.Column="2" Text="-" FontSize="10" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTokens1" Grid.Column="3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
+        </Grid>
+        <Grid x:Name="TaskRow2" Height="23" Visibility="Collapsed">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /><ColumnDefinition Width="54" /></Grid.ColumnDefinitions>
+          <Ellipse x:Name="TaskDot2" Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource DimBrush}" />
+          <TextBlock x:Name="TaskAccount2" Grid.Column="1" Text="-" FontSize="9.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTitle2" Grid.Column="2" Text="-" FontSize="10" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTokens2" Grid.Column="3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
+        </Grid>
+        <TextBlock x:Name="MoreTasksLabel" Height="16" Text="" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center" Visibility="Collapsed" />
+        <TextBlock x:Name="EmptyTasksLabel" Height="23" Text="No live or recent tasks" FontSize="10" Foreground="{DynamicResource MutedBrush}" TextAlignment="Center" />
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>
+'@
+
+$xmlDocument = [xml]$xaml
+$xmlReader = [System.Xml.XmlNodeReader]::new($xmlDocument)
+try {
+  $window = [System.Windows.Markup.XamlReader]::Load($xmlReader)
+} finally {
+  $xmlReader.Close()
+}
+
+function Find-UiElement {
+  param([string]$Name)
+  $element = $window.FindName($Name)
+  if ($null -eq $element) { throw "The UI element '$Name' was not loaded" }
+  return $element
+}
+
+$rootSurface = Find-UiElement "RootSurface"
+$connectionDot = Find-UiElement "ConnectionDot"
+$connectionLabel = Find-UiElement "ConnectionLabel"
+$freshnessLabel = Find-UiElement "FreshnessLabel"
+$dashboardButton = Find-UiElement "DashboardButton"
+$refreshButton = Find-UiElement "RefreshButton"
+$closeButton = Find-UiElement "CloseButton"
+$emptyTasksLabel = Find-UiElement "EmptyTasksLabel"
+$moreTasksLabel = Find-UiElement "MoreTasksLabel"
+
+$script:switchButtons = @(
+  (Find-UiElement "SwitchButton1"),
+  (Find-UiElement "SwitchButton2"),
+  (Find-UiElement "SwitchButton3")
+)
+
+$script:accountRows = @()
+for ($index = 1; $index -le 3; $index++) {
+  $script:accountRows += [pscustomobject]@{
+    Card = Find-UiElement "AccountCard$index"
+    Name = Find-UiElement "AccountName$index"
+    Meta = Find-UiElement "AccountMeta$index"
+    FiveValue = Find-UiElement "FiveValue$index"
+    FiveBar = Find-UiElement "FiveBar$index"
+    FiveReset = Find-UiElement "FiveReset$index"
+    WeekValue = Find-UiElement "WeekValue$index"
+    WeekBar = Find-UiElement "WeekBar$index"
+    WeekReset = Find-UiElement "WeekReset$index"
+  }
+}
+
+$script:taskRows = @()
+for ($index = 1; $index -le 2; $index++) {
+  $script:taskRows += [pscustomobject]@{
+    Row = Find-UiElement "TaskRow$index"
+    Dot = Find-UiElement "TaskDot$index"
+    Account = Find-UiElement "TaskAccount$index"
+    Title = Find-UiElement "TaskTitle$index"
+    Tokens = Find-UiElement "TaskTokens$index"
+  }
+}
+
+$script:isDarkTheme = Get-CodexDarkTheme
+function Apply-Theme {
+  param([bool]$Dark)
+  $palette = Get-ThemePalette $Dark
+  foreach ($entry in @{
+    RootBrush = "Root"; CardBrush = "Card"; SegmentBrush = "Segment";
+    ActiveSurfaceBrush = "ActiveSurface"; ActiveButtonBrush = "ActiveButton";
+    TextBrush = "Text"; RowTextBrush = "RowText"; MutedBrush = "Muted";
+    DimBrush = "Dim"; BorderBrush = "Border"; TrackBrush = "Track";
+    HoverBrush = "Hover"; PressedBrush = "Pressed"; AccentBrush = "Accent";
+    GreenBrush = "Green"; AmberBrush = "Amber"; RedBrush = "Red"
+  }.GetEnumerator()) {
+    $window.Resources[$entry.Key] = New-WpfBrush $palette[$entry.Value]
+  }
+}
+Apply-Theme $script:isDarkTheme
+
+$usageIconPath = Join-Path $scriptRoot "OpenCodexUsage.ico"
+$onlineIconPath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".opencodex\opencodex-tray-online.ico"
+$warningIconPath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".opencodex\opencodex-tray-warning.ico"
+$script:ownedIcons = [System.Collections.Generic.List[System.Drawing.Icon]]::new()
+function Get-AppIcon {
+  param([string]$Path, [System.Drawing.Icon]$Fallback)
+  if ([System.IO.File]::Exists($Path)) {
+    try {
+      $icon = [System.Drawing.Icon]::new($Path)
+      [void]$script:ownedIcons.Add($icon)
+      return $icon
+    } catch { }
+  }
+  return $Fallback
+}
+$onlineIcon = Get-AppIcon $usageIconPath (Get-AppIcon $onlineIconPath ([System.Drawing.SystemIcons]::Information))
+$warningIcon = Get-AppIcon $warningIconPath ([System.Drawing.SystemIcons]::Warning)
+if ([System.IO.File]::Exists($usageIconPath)) {
+  try { $window.Icon = [System.Windows.Media.Imaging.BitmapFrame]::Create([Uri]$usageIconPath) } catch { }
+}
+
+$notify = [System.Windows.Forms.NotifyIcon]::new()
+$notify.Icon = $onlineIcon
+$notify.Text = "OpenCodex Usage: loading"
+$notify.Visible = $true
+
+$menu = [System.Windows.Forms.ContextMenuStrip]::new()
+$showItem = $menu.Items.Add("Show usage")
+$refreshItem = $menu.Items.Add("Refresh now")
+$dashboardItem = $menu.Items.Add("Open OpenCodex dashboard")
+[void]$menu.Items.Add([System.Windows.Forms.ToolStripSeparator]::new())
+$startupItem = $menu.Items.Add("Starts with Windows")
+$startupItem.Checked = $true
+$startupItem.Enabled = $false
+[void]$menu.Items.Add([System.Windows.Forms.ToolStripSeparator]::new())
+$exitItem = $menu.Items.Add("Exit usage tray")
+$notify.ContextMenuStrip = $menu
+
+$script:pendingProcess = $null
+$script:pendingStdout = $null
+$script:pendingStderr = $null
+$script:pendingRequest = $null
+$script:pendingStartedAt = $null
+$script:lastData = $null
+$script:lastUpdatedAt = $null
+$script:lastForcedRefreshAt = [DateTime]::MinValue
+$script:isConnected = $false
+$script:confirmedActiveLabel = $null
+$script:exiting = $false
+$script:popupRequestedVisible = $false
+$script:autoHiddenForFocus = $false
+$script:lastForegroundHandle = [IntPtr]::Zero
+$script:lastForegroundContext = "other"
+$script:lastCodexWindowHandle = [IntPtr]::Zero
+$script:windowHandle = [IntPtr]::Zero
+$heartbeatPath = Join-Path $scriptRoot "tray-heartbeat.json"
+
+function Sync-CodexTheme {
+  $darkTheme = Get-CodexDarkTheme
+  if ($darkTheme -eq $script:isDarkTheme) { return }
+  $script:isDarkTheme = $darkTheme
+  Apply-Theme $darkTheme
+  if ($script:lastData) { Update-Interface $script:lastData }
+}
+
+function Get-CodexWindowHandle {
+  foreach ($process in @(Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })) {
+    try {
+      if ([string]$process.Path -like "*\OpenAI.Codex_*") { return $process.MainWindowHandle }
+    } catch { }
+  }
+  return [IntPtr]::Zero
+}
+
+function Get-ForegroundContext {
+  $foregroundWindow = [OpenCodexFocusNative]::GetForegroundWindow()
+  if ($foregroundWindow -eq $script:lastForegroundHandle) { return $script:lastForegroundContext }
+
+  $context = "other"
+  if ($foregroundWindow -ne [IntPtr]::Zero) {
+    $foregroundProcessId = [uint32]0
+    [void][OpenCodexFocusNative]::GetWindowThreadProcessId($foregroundWindow, [ref]$foregroundProcessId)
+    if ($foregroundProcessId -eq [uint32]$PID) {
+      $context = "popup"
+    } else {
+      try {
+        $foregroundProcess = Get-Process -Id ([int]$foregroundProcessId) -ErrorAction Stop
+        if (
+          $foregroundProcess.ProcessName -eq "ChatGPT" -and
+          [string]$foregroundProcess.Path -like "*\OpenAI.Codex_*"
+        ) {
+          $context = "codex"
+          $script:lastCodexWindowHandle = $foregroundWindow
+        }
+      } catch { }
+    }
+  }
+
+  $script:lastForegroundHandle = $foregroundWindow
+  $script:lastForegroundContext = $context
+  return $context
+}
+
+function Update-PopupFocusVisibility {
+  $context = Get-ForegroundContext
+  if (-not $script:popupRequestedVisible) { return }
+
+  if ($context -eq "other") {
+    if ($window.IsVisible) { Hide-Popup -ForFocus }
+    return
+  }
+  if ($context -eq "codex") {
+    if (-not $window.IsVisible) {
+      Show-Popup -ForFocusRestore -AnchorWindow $script:lastForegroundHandle
+    } else {
+      Position-Popup -AnchorWindow $script:lastForegroundHandle
+    }
+  }
+}
+
+function Write-Heartbeat {
+  try {
+    $heartbeat = [ordered]@{
+      pid = $PID
+      updatedAt = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+      popupVisible = $window.IsVisible
+      windowHandle = $script:windowHandle.ToInt64()
+      theme = if ($script:isDarkTheme) { "dark" } else { "light" }
+      opacity = $window.Opacity
+      topMost = $window.Topmost
+      requestedVisible = $script:popupRequestedVisible
+      autoHiddenForFocus = $script:autoHiddenForFocus
+      foregroundContext = $script:lastForegroundContext
+      activeAccount = if (-not [string]::IsNullOrWhiteSpace($script:confirmedActiveLabel)) { $script:confirmedActiveLabel } elseif ($script:lastData) { [string]$script:lastData.activeAccountLabel } else { $null }
+      runningTasks = if ($script:lastData) { [int]$script:lastData.counts.running } else { $null }
+      connected = [bool]$script:isConnected
+      presentation = "wpf"
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($heartbeatPath, $heartbeat, [System.Text.UTF8Encoding]::new($false))
+  } catch { }
+}
+
+function Set-BusyState {
+  param([bool]$Busy, [string]$Message = "")
+  $refreshButton.IsEnabled = -not $Busy
+  foreach ($button in $script:switchButtons) { $button.IsEnabled = -not $Busy }
+  if ($Busy -and -not [string]::IsNullOrWhiteSpace($Message)) {
+    $connectionLabel.Text = $Message
+    $connectionLabel.Foreground = $window.Resources["MutedBrush"]
+    $connectionDot.Fill = $window.Resources["AccentBrush"]
+  }
+}
+
+function ConvertTo-NativeArgument {
+  param([string]$Value)
+  if ($Value.Contains('"')) { throw "Invalid local process argument" }
+  return '"' + $Value + '"'
+}
+
+function Start-ProviderRequest {
+  param(
+    [ValidateSet("status", "switch")]
+    [string]$Operation,
+    [string]$AccountId = "",
+    [switch]$Force
+  )
+  if ($null -ne $script:pendingProcess) { return }
+
+  $psi = [System.Diagnostics.ProcessStartInfo]::new()
+  $psi.FileName = $nodePath
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $providerArguments = @($providerPath, $Operation)
+  if ($Operation -eq "switch") {
+    $providerArguments += $AccountId
+  } elseif ($Force) {
+    $providerArguments += "--refresh"
+    $script:lastForcedRefreshAt = [DateTime]::Now
+  }
+  $psi.Arguments = (($providerArguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
+
+  try {
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $psi
+    if (-not $process.Start()) { throw "The local data provider did not start" }
+    $script:pendingProcess = $process
+    $script:pendingStdout = $process.StandardOutput.ReadToEndAsync()
+    $script:pendingStderr = $process.StandardError.ReadToEndAsync()
+    $script:pendingRequest = [pscustomobject]@{ Operation = $Operation; AccountId = $AccountId }
+    $script:pendingStartedAt = [DateTime]::Now
+    if ($Operation -eq "switch") {
+      $targetButton = $script:switchButtons | Where-Object { [string]$_.Tag -eq $AccountId } | Select-Object -First 1
+      $targetName = if ($null -ne $targetButton) { [string]$targetButton.Content } else { "account" }
+      Set-BusyState $true "Switching to $targetName..."
+    } else {
+      Set-BusyState $true "Refreshing local usage..."
+    }
+  } catch {
+    $script:isConnected = $false
+    Set-BusyState $false
+    $connectionLabel.Text = "OpenCodex data unavailable"
+    $connectionLabel.Foreground = $window.Resources["RedBrush"]
+    $connectionDot.Fill = $window.Resources["RedBrush"]
+    $freshnessLabel.Text = $_.Exception.Message
+    Write-Heartbeat
+  }
+}
+
+function Update-WindowLayout {
+  $window.UpdateLayout()
+  if ($window.IsVisible) { Position-Popup -AnchorWindow $script:lastCodexWindowHandle }
+}
+
+function Update-Interface {
+  param($Data)
+  $script:lastData = $Data
+  $script:lastUpdatedAt = [DateTime]::Now
+  $script:isConnected = $true
+  $accounts = @($Data.accounts)
+  $activeAccount = $accounts | Where-Object { [bool]$_.active } | Select-Object -First 1
+  $activeLabel = if ($null -ne $activeAccount -and -not [string]::IsNullOrWhiteSpace([string]$activeAccount.displayName)) {
+    [string]$activeAccount.displayName
+  } else {
+    [string]$Data.activeAccountLabel
+  }
+  $script:confirmedActiveLabel = $activeLabel
+
+  $runningCount = [int]$Data.counts.running
+  $stalledCount = [int]$Data.counts.stalled
+  $liveMetric = if ($runningCount -eq 1) { "1 live" } else { "$runningCount live" }
+  $metricParts = @(
+    $liveMetric
+    "$(Format-CompactNumber ([double]$Data.totals.tokens7d)) tokens"
+    "$(Format-CompactNumber ([double]$Data.totals.requests7d)) req"
+  )
+  if ($stalledCount -gt 0) { $metricParts += "$stalledCount stalled" }
+  $connectionLabel.Text = $metricParts -join "  |  "
+  $connectionLabel.Foreground = $window.Resources["MutedBrush"]
+  $connectionDot.Fill = if ($stalledCount -gt 0) { $window.Resources["AmberBrush"] } else { $window.Resources["GreenBrush"] }
+
+  for ($index = 0; $index -lt 3; $index++) {
+    $button = $script:switchButtons[$index]
+    $row = $script:accountRows[$index]
+    if ($index -ge $accounts.Count) {
+      $button.Visibility = [System.Windows.Visibility]::Collapsed
+      $row.Card.Visibility = [System.Windows.Visibility]::Collapsed
+      continue
+    }
+
+    $accountData = $accounts[$index]
+    $isActive = [bool]$accountData.active
+    $displayName = [string]$accountData.displayName
+    $button.Content = $displayName
+    $button.Tag = [string]$accountData.id
+    $button.Visibility = [System.Windows.Visibility]::Visible
+    $button.Foreground = if ($isActive) { $window.Resources["TextBrush"] } else { $window.Resources["MutedBrush"] }
+    $button.Background = if ($isActive) { $window.Resources["ActiveButtonBrush"] } else { $window.Resources["SegmentBrush"] }
+    $button.ToolTip = "$($accountData.email) | $($accountData.plan) | $([int]$accountData.runningTasks) live"
+
+    $row.Card.Visibility = [System.Windows.Visibility]::Visible
+    $row.Card.Background = if ($isActive) { $window.Resources["ActiveSurfaceBrush"] } else { $window.Resources["CardBrush"] }
+    $row.Card.BorderBrush = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
+    $row.Card.BorderThickness = if ($isActive) { [System.Windows.Thickness]::new(2, 0, 0, 0) } else { [System.Windows.Thickness]::new(0) }
+    $row.Card.ToolTip = "$($accountData.email) | $($accountData.health)"
+    $row.Name.Text = $displayName
+    $row.Name.Foreground = if ($isActive) { $window.Resources["TextBrush"] } else { $window.Resources["RowTextBrush"] }
+    $plan = ([string]$accountData.plan).ToLowerInvariant()
+    $row.Meta.Text = "$plan | $(Format-CompactNumber ([double]$accountData.tokens7d)) 7d"
+
+    $fivePercent = $accountData.fiveHour.usedPercent
+    $fiveReset = Format-ResetCountdown $accountData.fiveHour.resetAt
+    $row.FiveValue.Text = "$(Format-Percent $fivePercent) used"
+    $row.FiveValue.Foreground = Get-QuotaBrush $fivePercent
+    $row.FiveBar.Value = if ($null -eq $fivePercent) { 0 } else { [Math]::Max(0, [Math]::Min(100, [double]$fivePercent)) }
+    $row.FiveBar.Foreground = Get-QuotaBrush $fivePercent
+    $row.FiveReset.Text = $fiveReset
+    $row.FiveBar.ToolTip = "5-hour window | $(Format-Percent $fivePercent) used | $fiveReset"
+
+    $weekPercent = $accountData.week.usedPercent
+    $weekReset = Format-ResetCountdown $accountData.week.resetAt
+    $row.WeekValue.Text = "$(Format-Percent $weekPercent) used"
+    $row.WeekValue.Foreground = Get-QuotaBrush $weekPercent
+    $row.WeekBar.Value = if ($null -eq $weekPercent) { 0 } else { [Math]::Max(0, [Math]::Min(100, [double]$weekPercent)) }
+    $row.WeekBar.Foreground = Get-QuotaBrush $weekPercent
+    $row.WeekReset.Text = $weekReset
+    $row.WeekBar.ToolTip = "Weekly window | $(Format-Percent $weekPercent) used | $weekReset"
+  }
+
+  $allTasks = @($Data.tasks)
+  $tasks = @($allTasks | Select-Object -First 2)
+  $emptyTasksLabel.Visibility = if ($tasks.Count -eq 0) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+  for ($index = 0; $index -lt 2; $index++) {
+    $taskRow = $script:taskRows[$index]
+    if ($index -ge $tasks.Count) {
+      $taskRow.Row.Visibility = [System.Windows.Visibility]::Collapsed
+      continue
+    }
+
+    $task = $tasks[$index]
+    $status = ([string]$task.status).ToLowerInvariant()
+    $statusBrush = switch ($status) {
+      "running" { $window.Resources["GreenBrush"] }
+      "stalled" { $window.Resources["AmberBrush"] }
+      "failed" { $window.Resources["RedBrush"] }
+      default { $window.Resources["DimBrush"] }
+    }
+    $taskRow.Row.Visibility = [System.Windows.Visibility]::Visible
+    $taskRow.Dot.Fill = $statusBrush
+    $taskRow.Account.Text = [string]$task.accountLabel
+    $taskRow.Account.Foreground = $statusBrush
+    $elapsed = Format-Elapsed $task.durationMs
+    $taskText = if ([string]::IsNullOrWhiteSpace($elapsed)) { [string]$task.title } else { "$($task.title) | $elapsed" }
+    $taskRow.Title.Text = $taskText
+    $taskRow.Title.ToolTip = "$status | $taskText"
+    $taskRow.Tokens.Text = Format-CompactNumber ([double]$task.tokensUsed)
+    $taskRow.Tokens.ToolTip = "$(Format-CompactNumber ([double]$task.tokensUsed)) tokens"
+  }
+
+  $moreCount = [Math]::Max(0, $allTasks.Count - 2)
+  if ($moreCount -gt 0) {
+    $moreTasksLabel.Text = "+$moreCount more in dashboard"
+    $moreTasksLabel.Visibility = [System.Windows.Visibility]::Visible
+  } else {
+    $moreTasksLabel.Visibility = [System.Windows.Visibility]::Collapsed
+  }
+
+  $freshnessLabel.Text = "updated now | local"
+  $activeFiveHourText = if ($null -ne $activeAccount) { Format-Percent $activeAccount.fiveHour.usedPercent } else { "--" }
+  $toolText = "OpenCodex: $activeLabel | 5h $activeFiveHourText | $runningCount running"
+  if ($toolText.Length -gt 63) { $toolText = $toolText.Substring(0, 63) }
+  $notify.Text = $toolText
+  $notify.Icon = $onlineIcon
+  Update-WindowLayout
+  Write-Heartbeat
+}
+
+function Show-ConfirmedSwitchWithoutStatus {
+  param($Data)
+  $accountId = [string]$Data.activeAccountId
+  $activeAccount = @($Data.accounts) | Where-Object { [bool]$_.active } | Select-Object -First 1
+  $accountLabel = if ($null -ne $activeAccount -and -not [string]::IsNullOrWhiteSpace([string]$activeAccount.displayName)) {
+    [string]$activeAccount.displayName
+  } else {
+    [string]$Data.activeAccountLabel
+  }
+  $script:confirmedActiveLabel = $accountLabel
+  $script:isConnected = $false
+
+  for ($index = 0; $index -lt 3; $index++) {
+    $button = $script:switchButtons[$index]
+    $row = $script:accountRows[$index]
+    $isActive = [string]$button.Tag -eq $accountId
+    if ($button.Visibility -eq [System.Windows.Visibility]::Visible) {
+      $button.Foreground = if ($isActive) { $window.Resources["TextBrush"] } else { $window.Resources["MutedBrush"] }
+      $button.Background = if ($isActive) { $window.Resources["ActiveButtonBrush"] } else { $window.Resources["SegmentBrush"] }
+    }
+    if ($row.Card.Visibility -eq [System.Windows.Visibility]::Visible) {
+      $row.Card.Background = if ($isActive) { $window.Resources["ActiveSurfaceBrush"] } else { $window.Resources["CardBrush"] }
+      $row.Card.BorderBrush = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
+      $row.Card.BorderThickness = if ($isActive) { [System.Windows.Thickness]::new(2, 0, 0, 0) } else { [System.Windows.Thickness]::new(0) }
+    }
+  }
+
+  $connectionLabel.Text = "$accountLabel active | usage refresh pending"
+  $connectionLabel.Foreground = $window.Resources["AmberBrush"]
+  $connectionDot.Fill = $window.Resources["AmberBrush"]
+  $freshnessLabel.Text = "retrying | local"
+  $notify.Icon = $warningIcon
+  $notify.Text = "OpenCodex: $accountLabel | usage refresh pending"
+  Write-Heartbeat
+}
+
+function Complete-ProviderRequest {
+  if ($null -eq $script:pendingProcess) { return }
+  $process = $script:pendingProcess
+  $request = $script:pendingRequest
+  $timedOut = ([DateTime]::Now - $script:pendingStartedAt).TotalSeconds -gt 38
+  if (-not $process.HasExited -and -not $timedOut) { return }
+
+  if ($timedOut -and -not $process.HasExited) {
+    try { $process.Kill() } catch { }
+  }
+  try { $process.WaitForExit(1500) } catch { }
+
+  $stdout = ""
+  $stderr = ""
+  try { $stdout = $script:pendingStdout.GetAwaiter().GetResult() } catch { }
+  try { $stderr = $script:pendingStderr.GetAwaiter().GetResult() } catch { }
+  $exitCode = if ($process.HasExited) { $process.ExitCode } else { -1 }
+  $process.Dispose()
+
+  $script:pendingProcess = $null
+  $script:pendingStdout = $null
+  $script:pendingStderr = $null
+  $script:pendingRequest = $null
+  $script:pendingStartedAt = $null
+  Set-BusyState $false
+
+  if ($timedOut -or $exitCode -ne 0) {
+    $script:isConnected = $false
+    $message = if ($timedOut) { "OpenCodex refresh timed out" } elseif (-not [string]::IsNullOrWhiteSpace($stderr)) { $stderr.Trim() } else { "OpenCodex refresh failed" }
+    $connectionLabel.Text = "OpenCodex data unavailable"
+    $connectionLabel.Foreground = $window.Resources["RedBrush"]
+    $connectionDot.Fill = $window.Resources["RedBrush"]
+    $freshnessLabel.Text = "refresh failed | local"
+    $freshnessLabel.ToolTip = $message
+    $notify.Icon = $warningIcon
+    $notify.Text = "OpenCodex Usage: data unavailable"
+    if ($request.Operation -eq "switch") {
+      $notify.ShowBalloonTip(3500, "Account switch failed", $message, [System.Windows.Forms.ToolTipIcon]::Error)
+    }
+    Write-Heartbeat
+    return
+  }
+
+  try {
+    $data = $stdout | ConvertFrom-Json
+    if ($request.Operation -eq "switch") {
+      if (-not [bool]$data.switchConfirmed) { throw "The account switch was not confirmed" }
+      if ([bool]$data.connected) { Update-Interface $data }
+      else { Show-ConfirmedSwitchWithoutStatus $data }
+      $balloonText = "Now using $($data.activeAccountLabel)."
+      if (-not [bool]$data.connected) { $balloonText += " Usage refresh will retry." }
+      $notify.ShowBalloonTip(2200, "OpenCodex account switched", $balloonText, [System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+      Update-Interface $data
+    }
+  } catch {
+    $script:isConnected = $false
+    $connectionLabel.Text = "OpenCodex data unavailable"
+    $connectionLabel.Foreground = $window.Resources["RedBrush"]
+    $connectionDot.Fill = $window.Resources["RedBrush"]
+    $freshnessLabel.Text = "response unreadable | local"
+    $notify.Icon = $warningIcon
+    Write-Heartbeat
+  }
+}
+
+function Get-WindowScale {
+  param([IntPtr]$AnchorWindow)
+  if ($AnchorWindow -eq [IntPtr]::Zero) { return 1.0 }
+  try {
+    $dpi = [OpenCodexFocusNative]::GetDpiForWindow($AnchorWindow)
+    if ($dpi -ge 96) { return [double]$dpi / 96.0 }
+  } catch { }
+  return 1.0
+}
+
+function Position-Popup {
+  param([IntPtr]$AnchorWindow = [IntPtr]::Zero)
+  if ($AnchorWindow -eq [IntPtr]::Zero) {
+    $AnchorWindow = if ($script:lastCodexWindowHandle -ne [IntPtr]::Zero) { $script:lastCodexWindowHandle } else { Get-CodexWindowHandle }
+  }
+
+  $screen = if ($AnchorWindow -ne [IntPtr]::Zero) {
+    [System.Windows.Forms.Screen]::FromHandle($AnchorWindow)
+  } else {
+    [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
+  }
+  $scale = Get-WindowScale $AnchorWindow
+  $workingArea = $screen.WorkingArea
+  $popupWidth = if ($window.ActualWidth -gt 0) { $window.ActualWidth } else { $window.Width }
+  $popupHeight = if ($window.ActualHeight -gt 0) { $window.ActualHeight } else { 360 }
+  $workLeft = $workingArea.Left / $scale
+  $workTop = $workingArea.Top / $scale
+  $workRight = $workingArea.Right / $scale
+  $workBottom = $workingArea.Bottom / $scale
+  $x = $workRight - $popupWidth - 8
+  $y = $workBottom - $popupHeight - 8
+
+  if ($AnchorWindow -ne [IntPtr]::Zero) {
+    $windowRect = [OpenCodexWindowRect]::new()
+    if ([OpenCodexFocusNative]::GetWindowRect($AnchorWindow, [ref]$windowRect)) {
+      $anchorLeft = $windowRect.Left / $scale
+      $anchorRight = $windowRect.Right / $scale
+      $anchorBottom = $windowRect.Bottom / $scale
+      $leftInset = 286
+      $rightReserve = 500
+      $edgeGap = 12
+      $preferredX = $anchorLeft + $leftInset
+      $browserSafeMaxX = $anchorRight - $rightReserve - $popupWidth - $edgeGap
+      $x = if ($browserSafeMaxX -ge ($anchorLeft + $edgeGap)) { [Math]::Min($preferredX, $browserSafeMaxX) } else { $anchorLeft + $edgeGap }
+      $y = $anchorBottom - $popupHeight - $edgeGap
+    }
+  }
+
+  $maxX = $workRight - $popupWidth - 8
+  $maxY = $workBottom - $popupHeight - 8
+  $window.Left = [Math]::Max($workLeft + 8, [Math]::Min($x, $maxX))
+  $window.Top = [Math]::Max($workTop + 8, [Math]::Min($y, $maxY))
+}
+
+function Show-Popup {
+  param(
+    [switch]$ForFocusRestore,
+    [IntPtr]$AnchorWindow = [IntPtr]::Zero
+  )
+  $script:popupRequestedVisible = $true
+  $script:autoHiddenForFocus = $false
+  Sync-CodexTheme
+
+  if (-not $window.IsVisible) {
+    $window.ShowActivated = -not [bool]$ForFocusRestore
+    $window.Show()
+    $window.UpdateLayout()
+  }
+  $window.Topmost = $true
+  Position-Popup -AnchorWindow $AnchorWindow
+  if ($ForFocusRestore -and $AnchorWindow -ne [IntPtr]::Zero) {
+    [void][OpenCodexFocusNative]::SetForegroundWindow($AnchorWindow)
+  } elseif (-not $ForFocusRestore) {
+    [void]$window.Activate()
+  }
+  $showItem.Text = "Hide usage"
+  Write-Heartbeat
+}
+
+function Hide-Popup {
+  param([switch]$ForFocus)
+  $window.Hide()
+  if ($ForFocus) {
+    $script:autoHiddenForFocus = $true
+    $showItem.Text = "Hide usage"
+  } else {
+    $script:popupRequestedVisible = $false
+    $script:autoHiddenForFocus = $false
+    $showItem.Text = "Show usage"
+  }
+  Write-Heartbeat
+}
+
+function Toggle-Popup {
+  if ($script:popupRequestedVisible) { Hide-Popup } else { Show-Popup }
+}
+
+function Get-OpenCodexDashboardUrl {
+  $port = 10100
+  $openCodexRoot = if (-not [string]::IsNullOrWhiteSpace($env:OPENCODEX_HOME)) {
+    $env:OPENCODEX_HOME.Trim()
+  } else {
+    Join-Path ([Environment]::GetFolderPath("UserProfile")) ".opencodex"
+  }
+  $configPath = Join-Path $openCodexRoot "config.json"
+  try {
+    if ([System.IO.File]::Exists($configPath)) {
+      $config = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json
+      $configuredPort = [int]$config.port
+      if ($configuredPort -gt 0 -and $configuredPort -le 65535) { $port = $configuredPort }
+    }
+  } catch { }
+  return "http://127.0.0.1:$port/"
+}
+
+$openDashboard = {
+  try { Start-Process (Get-OpenCodexDashboardUrl) | Out-Null } catch { }
+}
+
+foreach ($button in $script:switchButtons) {
+  $button.Add_Click({
+    param($sender, $eventArgs)
+    $accountId = [string]$sender.Tag
+    if ([string]::IsNullOrWhiteSpace($accountId)) { return }
+    if ($script:lastData -and [string]$script:lastData.activeAccountId -eq $accountId) { return }
+    Start-ProviderRequest -Operation "switch" -AccountId $accountId
+  })
+}
+
+$refreshButton.Add_Click({ Start-ProviderRequest -Operation "status" -Force })
+$dashboardButton.Add_Click($openDashboard)
+$closeButton.Add_Click({ Hide-Popup })
+$window.Add_KeyDown({
+  param($sender, $eventArgs)
+  if ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape) { Hide-Popup }
+})
+$window.Add_SourceInitialized({
+  $script:windowHandle = [System.Windows.Interop.WindowInteropHelper]::new($window).Handle
+})
+$window.Add_Closing({
+  param($sender, $eventArgs)
+  if (-not $script:exiting) {
+    $eventArgs.Cancel = $true
+    Hide-Popup
+  }
+})
+
+$notify.add_MouseClick({
+  param($sender, $eventArgs)
+  if ($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Toggle-Popup }
+})
+$showItem.add_Click({ Toggle-Popup })
+$refreshItem.add_Click({ Start-ProviderRequest -Operation "status" -Force })
+$dashboardItem.add_Click($openDashboard)
+
+$application = [System.Windows.Application]::new()
+$application.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+$exitItem.add_Click({
+  $script:exiting = $true
+  $application.Shutdown()
+})
+
+$pollTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$pollTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+$pollTimer.Add_Tick({
+  if ($showEvent.WaitOne(0)) { Show-Popup }
+  if ($stopEvent.WaitOne(0)) {
+    $script:exiting = $true
+    $application.Shutdown()
+    return
+  }
+  Update-PopupFocusVisibility
+  Complete-ProviderRequest
+  if ($null -ne $script:lastUpdatedAt -and $null -eq $script:pendingProcess) {
+    $ageSeconds = [Math]::Floor(([DateTime]::Now - $script:lastUpdatedAt).TotalSeconds)
+    if ($ageSeconds -lt 60) { $freshnessLabel.Text = "updated now | local" }
+    elseif ($ageSeconds -lt 3600) { $freshnessLabel.Text = "updated $([Math]::Floor($ageSeconds / 60))m ago | local" }
+    else { $freshnessLabel.Text = "updated $([Math]::Floor($ageSeconds / 3600))h ago | local" }
+  }
+})
+
+$refreshTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$refreshTimer.Interval = [TimeSpan]::FromSeconds(30)
+$refreshTimer.Add_Tick({
+  if ($null -ne $script:pendingProcess) { return }
+  $force = ([DateTime]::Now - $script:lastForcedRefreshAt).TotalMinutes -ge 5
+  if ($force) { Start-ProviderRequest -Operation "status" -Force }
+  else { Start-ProviderRequest -Operation "status" }
+})
+
+$heartbeatTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$heartbeatTimer.Interval = [TimeSpan]::FromSeconds(5)
+$heartbeatTimer.Add_Tick({
+  Sync-CodexTheme
+  Write-Heartbeat
+})
+
+try {
+  $pollTimer.Start()
+  $refreshTimer.Start()
+  $heartbeatTimer.Start()
+  Write-Heartbeat
+  Start-ProviderRequest -Operation "status" -Force
+  if ($ShowOnStart) { Show-Popup }
+  [void]$application.Run()
+} finally {
+  $script:exiting = $true
+  $pollTimer.Stop()
+  $refreshTimer.Stop()
+  $heartbeatTimer.Stop()
+  if ($null -ne $script:pendingProcess) {
+    try {
+      if (-not $script:pendingProcess.HasExited) { $script:pendingProcess.Kill() }
+      $script:pendingProcess.Dispose()
+    } catch { }
+  }
+  $notify.Visible = $false
+  $notify.Dispose()
+  $menu.Dispose()
+  foreach ($icon in $script:ownedIcons) { $icon.Dispose() }
+  try { if ($window.IsVisible) { $window.Close() } } catch { }
+  try { Remove-Item -LiteralPath $heartbeatPath -Force -ErrorAction SilentlyContinue } catch { }
+  try { $mutex.ReleaseMutex() } catch { }
+  $mutex.Dispose()
+  $showEvent.Dispose()
+  $stopEvent.Dispose()
+}

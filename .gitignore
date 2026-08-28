@@ -1,0 +1,17 @@
+# Runtime state
+tray-heartbeat.json
+
+# Local logs and diagnostics
+*.log
+*.tmp
+
+# Editor and operating-system metadata
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Packaged downloads
+*.zip
