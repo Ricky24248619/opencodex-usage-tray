@@ -49,7 +49,8 @@ $allowedInstallFiles = @(
   "status-provider.mjs",
   "OpenCodexUsage.ico",
   "README.md",
-  "tray-heartbeat.json"
+  "tray-heartbeat.json",
+  "tray-settings.json"
 )
 
 if (-not $resolvedInstallRoot.StartsWith($resolvedLocalAppData + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -150,7 +151,7 @@ function Save-Shortcut {
   $shortcut.Save()
 }
 
-Save-Shortcut $startupShortcutPath $false
+Save-Shortcut $startupShortcutPath $true
 Save-Shortcut $startMenuShortcutPath $true
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
 

@@ -10,18 +10,27 @@ A small, native Windows companion for OpenCodex that keeps account usage and Cod
 ## Highlights
 
 - Shows all three configured OpenCodex accounts at once.
+- Keeps a 316-pixel compact strip visible by default with only the active account's 5-hour and weekly usage.
+- Expands on demand to the full account switcher and task view, then collapses back to the strip.
 - Displays 5-hour and weekly quota usage, seven-day tokens, and seven-day requests.
 - Surfaces running, stalled, and recent Codex tasks with their account and token count.
 - Switches the active OpenCodex account with one click.
-- Follows Codex's light, dark, or system appearance.
+- Uses Codex's native light and dark surfaces, typography, dividers, and control states.
 - Stays above Codex while Codex is focused, hides when you use another app, and returns without taking keyboard focus.
-- Anchors beside Codex content and reserves the right side for Codex Browser.
+- Lets you choose the top-left or bottom-left Codex content corner and remembers the choice.
+- Reserves the right side for Codex Browser in either corner mode.
 - Opens the full OpenCodex dashboard from a compact header button.
 - Runs as a notification-area app across every Codex task; it is not attached to one chat.
 
 The tray reads local OpenCodex management endpoints and Codex's local task databases. It does not host a web page or run its own server.
 
 ## Screenshots
+
+### Permanent compact view
+
+![Compact current-account usage strip](docs/tray-compact.png)
+
+### Expanded details
 
 | Light theme | Dark theme |
 | --- | --- |
@@ -70,17 +79,24 @@ powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File .\install.p
 
 The popup is intentionally tied to the Codex window rather than to a particular Codex task. Once enabled, it follows you across all chats.
 
+The default permanent view is a 316×62 compact strip. It shows only the active account, its plan, the two quota windows, a dashboard shortcut, and an expand button. The expanded view contains all accounts, account switching, resets, tasks, refresh, positioning, and collapse controls.
+
 | Control | Action |
 | --- | --- |
 | Account button | Makes that account active in OpenCodex |
+| `▾` | Expands the compact strip to the full account and task view |
+| `▴` | Collapses the full view back to the active-account strip |
 | `↗` | Opens the full OpenCodex dashboard |
+| `↖` or `↙` corner button | Moves the popup between the top-left and bottom-left Codex content corners |
 | `↻` | Refreshes quotas and task status immediately |
 | `×` or `Esc` | Hides the popup while leaving the tray running |
 | Tray icon, left-click | Shows or hides the popup |
-| Tray icon, right-click | Opens show, refresh, dashboard, and exit commands |
+| Tray icon, right-click | Opens show, refresh, dashboard, popup-corner, and exit commands |
 | **OpenCodex Usage** in Start | Starts the tray or reveals the existing instance |
 
 Account switching is not display-only: it changes the active account used by OpenCodex. The popup confirms the switch and then refreshes usage.
+
+The **5-hour** and **Weekly** values both show percentage **used**, not percentage remaining. Green is below 75% used, amber is 75–89%, and red is 90% or higher.
 
 ### Focus and positioning
 
@@ -89,6 +105,7 @@ When the popup has been enabled:
 - focusing Codex shows it above the Codex window;
 - focusing another application hides it;
 - returning to Codex restores it without taking focus from the editor or chat;
+- pressing the corner button, or choosing **Popup corner** from the tray menu, switches between top left and bottom left;
 - opening Codex Browser keeps a reserved area on the right so the popup does not cover the Browser panel; and
 - moving or resizing Codex causes the popup to reposition within the active monitor's working area.
 
@@ -96,7 +113,7 @@ If you explicitly hide the popup with `×`, `Esc`, or the tray icon, it stays hi
 
 ## Start with Windows
 
-The installer adds `OpenCodex Usage Tray.lnk` to your per-user Startup folder. Exiting from the tray menu stops it for the current session, but it starts again after the next Windows sign-in.
+The installer adds `OpenCodex Usage Tray.lnk` to your per-user Startup folder. The compact strip starts enabled, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu stops it for the current session, but it starts again after the next Windows sign-in.
 
 To disable automatic startup without uninstalling:
 
@@ -164,7 +181,7 @@ Confirm the OpenCodex dashboard is reachable on the port stored in `%USERPROFILE
 - The OpenCodex management token is read from the existing environment variable or token file, used in process memory, and never displayed by the UI.
 - Codex task databases are opened read-only.
 - Switching accounts is the only OpenCodex state change, and it occurs only after you press an account button.
-- The app writes only its installation files, a small readiness heartbeat, and per-user shortcuts.
+- The app writes only its installation files, a small readiness heartbeat, the selected popup corner, and per-user shortcuts.
 
 Treat the OpenCodex admin token as a credential. Do not publish it, copy it into an issue, or expose the OpenCodex management API beyond the local machine.
 
@@ -175,10 +192,11 @@ Treat the OpenCodex admin token as a credential. Do not publish it, copy it into
 | `OpenCodexUsageTray.ps1` | WPF popup, focus behavior, theme, and tray controls |
 | `OpenCodexUsageTray.WinForms.ps1` | Preserved legacy presentation for rollback and troubleshooting |
 | `status-provider.mjs` | Local OpenCodex and read-only Codex task data adapter |
+| `test-provider.mjs` | Asymmetric 5-hour/weekly quota mapping regression tests |
 | `install.ps1` | Safe per-user installation and shortcut creation |
 | `uninstall.ps1` | Safe removal of installed files and shortcuts |
 | `OpenCodexUsage.ico` | Application and notification-area icon |
-| `test.ps1` | Offline syntax and documentation-asset validation |
+| `test.ps1` | Offline syntax, quota mapping, and documentation-asset validation |
 
 There is no build step. To run directly from a checkout for development:
 

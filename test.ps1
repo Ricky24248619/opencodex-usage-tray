@@ -31,6 +31,20 @@ $nonAscii = Select-String -LiteralPath $mainPath -Pattern '[^\x00-\x7F]'
 if ($nonAscii) {
   throw "The Windows PowerShell entry script must remain ASCII-safe"
 }
+$mainText = [System.IO.File]::ReadAllText($mainPath)
+foreach ($requiredUiMapping in @(
+  '$compactFivePercent = $activeAccount.fiveHour.usedPercent',
+  '$compactWeekPercent = $activeAccount.week.usedPercent',
+  '$fivePercent = $accountData.fiveHour.usedPercent',
+  '$weekPercent = $accountData.week.usedPercent',
+  'x:Name="CompactPanel"',
+  'x:Name="ExpandButton"',
+  'x:Name="CollapseButton"'
+)) {
+  if (-not $mainText.Contains($requiredUiMapping)) {
+    throw "Missing required UI mapping: $requiredUiMapping"
+  }
+}
 
 $providerPath = Join-Path $root "status-provider.mjs"
 if (-not (Test-Path -LiteralPath $providerPath -PathType Leaf)) {
@@ -40,8 +54,15 @@ $node = Get-Command node.exe -ErrorAction SilentlyContinue
 if ($null -eq $node) { $node = Get-Command node -ErrorAction Stop }
 & $node.Source --check $providerPath
 if ($LASTEXITCODE -ne 0) { throw "Node syntax validation failed" }
+$providerTestPath = Join-Path $root "test-provider.mjs"
+if (-not (Test-Path -LiteralPath $providerTestPath -PathType Leaf)) {
+  throw "Missing required file: test-provider.mjs"
+}
+& $node.Source $providerTestPath
+if ($LASTEXITCODE -ne 0) { throw "Quota projection tests failed" }
 
-foreach ($asset in @("docs\hero.png", "docs\tray-light.png", "docs\tray-dark.png")) {
+$documentationAssets = @("docs\hero.png", "docs\tray-compact.png", "docs\tray-light.png", "docs\tray-dark.png")
+foreach ($asset in $documentationAssets) {
   if (-not (Test-Path -LiteralPath (Join-Path $root $asset) -PathType Leaf)) {
     throw "Missing documentation asset: $asset"
   }
@@ -51,5 +72,6 @@ foreach ($asset in @("docs\hero.png", "docs\tray-light.png", "docs\tray-dark.png
   Valid = $true
   PowerShellFiles = $powerShellFiles.Count
   Provider = "status-provider.mjs"
-  DocumentationAssets = 3
+  ProviderTests = "test-provider.mjs"
+  DocumentationAssets = $documentationAssets.Count
 }

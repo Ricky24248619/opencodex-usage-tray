@@ -66,6 +66,27 @@ Add-Type -TypeDefinition $nativeTypeDefinition
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $providerPath = Join-Path $scriptRoot "status-provider.mjs"
+$settingsRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OpenCodexUsageTray"
+$settingsPath = Join-Path $settingsRoot "tray-settings.json"
+$script:popupCorner = "BottomLeft"
+try {
+  if ([System.IO.File]::Exists($settingsPath)) {
+    $savedSettings = [System.IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json
+    if (@("TopLeft", "BottomLeft") -contains [string]$savedSettings.popupCorner) {
+      $script:popupCorner = [string]$savedSettings.popupCorner
+    } elseif ([string]$savedSettings.popupCorner -eq "TopRight") {
+      $script:popupCorner = "BottomLeft"
+    }
+  }
+} catch { }
+
+function Save-TraySettings {
+  try {
+    [void][System.IO.Directory]::CreateDirectory($settingsRoot)
+    $settingsJson = [ordered]@{ popupCorner = $script:popupCorner } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($settingsPath, $settingsJson, [System.Text.UTF8Encoding]::new($false))
+  } catch { }
+}
 
 $stopEventCreated = $false
 $stopEvent = [System.Threading.EventWaitHandle]::new(
@@ -154,20 +175,20 @@ function Get-ThemePalette {
 
   if ($Dark) {
     return @{
-      Root = "#F218181B"
-      Card = "#FF232327"
-      Segment = "#FF202024"
-      ActiveSurface = "#FF252D32"
-      ActiveButton = "#FF303A40"
-      Text = "#FFF5F5F6"
-      RowText = "#FFE1E1E5"
-      Muted = "#FFA7A7AF"
-      Dim = "#FF777780"
-      Border = "#FF343439"
-      Track = "#FF3B3B41"
-      Hover = "#FF333338"
-      Pressed = "#FF3D3D43"
-      Accent = "#FF64AAB5"
+      Root = "#E6111111"
+      Card = "#00000000"
+      Segment = "#FF1A1A1A"
+      ActiveSurface = "#FF1D1D1D"
+      ActiveButton = "#FF212121"
+      Text = "#FFFCFCFC"
+      RowText = "#FFDFDFDF"
+      Muted = "#FFAAAAAA"
+      Dim = "#FF888888"
+      Border = "#FF242424"
+      Track = "#FF303030"
+      Hover = "#FF222222"
+      Pressed = "#FF292929"
+      Accent = "#FF0169CC"
       Green = "#FF48C78E"
       Amber = "#FFF0AA45"
       Red = "#FFEF7373"
@@ -175,20 +196,20 @@ function Get-ThemePalette {
   }
 
   return @{
-    Root = "#F7F8F8F9"
-    Card = "#FFFFFFFF"
-    Segment = "#FFF0F0F1"
-    ActiveSurface = "#FFF1F6F7"
-    ActiveButton = "#FFDDECEF"
-    Text = "#FF202023"
-    RowText = "#FF39393D"
-    Muted = "#FF696970"
-    Dim = "#FF898990"
-    Border = "#FFDADADD"
-    Track = "#FFE3E3E6"
-    Hover = "#FFE7E7E8"
-    Pressed = "#FFDCDCDD"
-    Accent = "#FF4F97A3"
+    Root = "#E6F9F9F7"
+    Card = "#00000000"
+    Segment = "#FFEEEEEC"
+    ActiveSurface = "#FFEEEEEC"
+    ActiveButton = "#FFE6E6E4"
+    Text = "#FF2D2D2B"
+    RowText = "#FF2D2D2B"
+    Muted = "#FF757573"
+    Dim = "#FF8F8F8D"
+    Border = "#FFE9E9E7"
+    Track = "#FFE1E1DF"
+    Hover = "#FFE6E6E4"
+    Pressed = "#FFD9D9D6"
+    Accent = "#FF0D6ECA"
     Green = "#FF238A5B"
     Amber = "#FFB76A08"
     Red = "#FFC73D3D"
@@ -251,7 +272,23 @@ function Get-QuotaBrush {
   $percent = [double]$Value
   if ($percent -ge 90) { return $window.Resources["RedBrush"] }
   if ($percent -ge 75) { return $window.Resources["AmberBrush"] }
-  return $window.Resources["AccentBrush"]
+  return $window.Resources["GreenBrush"]
+}
+
+function Set-QuotaMeter {
+  param(
+    $Meter,
+    $Fill,
+    $FillColumn,
+    $EmptyColumn,
+    $Value,
+    [string]$ToolTip
+  )
+  $percent = if ($null -eq $Value) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(100.0, [double]$Value)) }
+  $FillColumn.Width = [System.Windows.GridLength]::new($percent, [System.Windows.GridUnitType]::Star)
+  $EmptyColumn.Width = [System.Windows.GridLength]::new(100.0 - $percent, [System.Windows.GridUnitType]::Star)
+  $Fill.Background = Get-QuotaBrush $Value
+  $Meter.ToolTip = $ToolTip
 }
 
 $xaml = @'
@@ -260,7 +297,7 @@ $xaml = @'
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
   x:Name="PopupWindow"
   Title="OpenCodex Usage"
-  Width="378"
+  Width="316"
   SizeToContent="Height"
   MaxHeight="520"
   WindowStyle="None"
@@ -279,39 +316,39 @@ $xaml = @'
   SnapsToDevicePixels="True"
   UseLayoutRounding="True">
   <Window.Resources>
-    <SolidColorBrush x:Key="RootBrush" Color="#F7F8F8F9" />
-    <SolidColorBrush x:Key="CardBrush" Color="#FFFFFFFF" />
-    <SolidColorBrush x:Key="SegmentBrush" Color="#FFF0F0F1" />
-    <SolidColorBrush x:Key="ActiveSurfaceBrush" Color="#FFF1F6F7" />
-    <SolidColorBrush x:Key="ActiveButtonBrush" Color="#FFDDECEF" />
-    <SolidColorBrush x:Key="TextBrush" Color="#FF202023" />
-    <SolidColorBrush x:Key="RowTextBrush" Color="#FF39393D" />
-    <SolidColorBrush x:Key="MutedBrush" Color="#FF696970" />
-    <SolidColorBrush x:Key="DimBrush" Color="#FF898990" />
-    <SolidColorBrush x:Key="BorderBrush" Color="#FFDADADD" />
-    <SolidColorBrush x:Key="TrackBrush" Color="#FFE3E3E6" />
-    <SolidColorBrush x:Key="HoverBrush" Color="#FFE7E7E8" />
-    <SolidColorBrush x:Key="PressedBrush" Color="#FFDCDCDD" />
-    <SolidColorBrush x:Key="AccentBrush" Color="#FF4F97A3" />
+    <SolidColorBrush x:Key="RootBrush" Color="#E6F9F9F7" />
+    <SolidColorBrush x:Key="CardBrush" Color="#00000000" />
+    <SolidColorBrush x:Key="SegmentBrush" Color="#FFEEEEEC" />
+    <SolidColorBrush x:Key="ActiveSurfaceBrush" Color="#FFEEEEEC" />
+    <SolidColorBrush x:Key="ActiveButtonBrush" Color="#FFE6E6E4" />
+    <SolidColorBrush x:Key="TextBrush" Color="#FF2D2D2B" />
+    <SolidColorBrush x:Key="RowTextBrush" Color="#FF2D2D2B" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#FF757573" />
+    <SolidColorBrush x:Key="DimBrush" Color="#FF8F8F8D" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#FFE9E9E7" />
+    <SolidColorBrush x:Key="TrackBrush" Color="#FFE1E1DF" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#FFE6E6E4" />
+    <SolidColorBrush x:Key="PressedBrush" Color="#FFD9D9D6" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF0D6ECA" />
     <SolidColorBrush x:Key="GreenBrush" Color="#FF238A5B" />
     <SolidColorBrush x:Key="AmberBrush" Color="#FFB76A08" />
     <SolidColorBrush x:Key="RedBrush" Color="#FFC73D3D" />
 
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontSize" Value="12" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
     <Style x:Key="IconButtonStyle" TargetType="Button">
-      <Setter Property="Width" Value="24" />
-      <Setter Property="Height" Value="24" />
-      <Setter Property="Margin" Value="2,0,0,0" />
+      <Setter Property="Width" Value="26" />
+      <Setter Property="Height" Value="26" />
+      <Setter Property="Margin" Value="1,0,0,0" />
       <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="FontFamily" Value="Segoe UI Symbol" />
-      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontSize" Value="14" />
       <Setter Property="Focusable" Value="False" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Template">
@@ -338,13 +375,13 @@ $xaml = @'
     </Style>
 
     <Style x:Key="SegmentButtonStyle" TargetType="Button">
-      <Setter Property="Height" Value="26" />
+      <Setter Property="Height" Value="28" />
       <Setter Property="Margin" Value="2" />
       <Setter Property="Padding" Value="4,0" />
       <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
       <Setter Property="Background" Value="{DynamicResource SegmentBrush}" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="FontSize" Value="11.5" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Focusable" Value="False" />
       <Setter Property="Cursor" Value="Hand" />
@@ -371,55 +408,78 @@ $xaml = @'
       </Setter>
     </Style>
 
-    <Style x:Key="QuotaProgressStyle" TargetType="ProgressBar">
-      <Setter Property="Height" Value="5" />
-      <Setter Property="Minimum" Value="0" />
-      <Setter Property="Maximum" Value="100" />
-      <Setter Property="Background" Value="{DynamicResource TrackBrush}" />
-      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-      <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ProgressBar">
-            <Grid ClipToBounds="True">
-              <Border Background="{TemplateBinding Background}" CornerRadius="2.5" />
-              <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="2.5" HorizontalAlignment="Left" />
-            </Grid>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <Style x:Key="AccountCardStyle" TargetType="Border">
-      <Setter Property="Height" Value="56" />
-      <Setter Property="Margin" Value="0,0,0,4" />
-      <Setter Property="Padding" Value="8,6" />
-      <Setter Property="Background" Value="{DynamicResource CardBrush}" />
-      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Height" Value="66" />
+      <Setter Property="Padding" Value="8,5" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="CornerRadius" Value="4" />
     </Style>
   </Window.Resources>
 
-  <Border x:Name="RootSurface" Background="{DynamicResource RootBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
-    <StackPanel>
-      <Grid Height="35">
+  <Border x:Name="RootSurface" Background="{DynamicResource RootBrush}" BorderThickness="0" CornerRadius="8" Padding="8">
+    <Grid>
+      <Grid x:Name="CompactPanel" Height="46">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="14" />
+          <ColumnDefinition Width="72" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="7" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="24" />
+          <ColumnDefinition Width="24" />
+        </Grid.ColumnDefinitions>
+        <Ellipse x:Name="CompactConnectionDot" Grid.Column="0" Width="7" Height="7" HorizontalAlignment="Left" Fill="{DynamicResource DimBrush}" />
+        <StackPanel Grid.Column="1" Margin="0,0,5,0" VerticalAlignment="Center">
+          <TextBlock x:Name="CompactAccount" Text="Loading" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="CompactMeta" Text="active account" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <Grid Grid.Column="2" VerticalAlignment="Center">
+          <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="7" /></Grid.RowDefinitions>
+          <Grid Grid.Row="0"><TextBlock Text="5-hour" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="CompactFiveValue" Text="--" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+          <Grid x:Name="CompactFiveBar" Grid.Row="1" Height="4" ClipToBounds="True">
+            <Grid.ColumnDefinitions><ColumnDefinition x:Name="CompactFiveFillColumn" Width="0*" /><ColumnDefinition x:Name="CompactFiveEmptyColumn" Width="100*" /></Grid.ColumnDefinitions>
+            <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="2" />
+            <Border x:Name="CompactFiveFill" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="2" />
+          </Grid>
+        </Grid>
+        <Border Grid.Column="3" Width="1" Height="28" HorizontalAlignment="Center" Background="{DynamicResource BorderBrush}" />
+        <Grid Grid.Column="4" VerticalAlignment="Center">
+          <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="7" /></Grid.RowDefinitions>
+          <Grid Grid.Row="0"><TextBlock Text="Weekly" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="CompactWeekValue" Text="--" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+          <Grid x:Name="CompactWeekBar" Grid.Row="1" Height="4" ClipToBounds="True">
+            <Grid.ColumnDefinitions><ColumnDefinition x:Name="CompactWeekFillColumn" Width="0*" /><ColumnDefinition x:Name="CompactWeekEmptyColumn" Width="100*" /></Grid.ColumnDefinitions>
+            <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="2" />
+            <Border x:Name="CompactWeekFill" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="2" />
+          </Grid>
+        </Grid>
+        <Button x:Name="CompactDashboardButton" Grid.Column="5" Content="&#x2197;" Width="24" Height="24" Style="{StaticResource IconButtonStyle}" ToolTip="Open full OpenCodex dashboard" AutomationProperties.Name="Open full OpenCodex dashboard" />
+        <Button x:Name="ExpandButton" Grid.Column="6" Content="&#x25BE;" Width="24" Height="24" Style="{StaticResource IconButtonStyle}" ToolTip="Expand usage details" AutomationProperties.Name="Expand usage details" />
+      </Grid>
+
+      <StackPanel x:Name="ExpandedPanel" Visibility="Collapsed">
+      <Grid Height="40">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <Ellipse x:Name="ConnectionDot" Grid.Column="0" Width="7" Height="7" Margin="1,0,8,11" VerticalAlignment="Center" Fill="{DynamicResource DimBrush}" />
+        <Ellipse x:Name="ConnectionDot" Grid.Column="0" Width="8" Height="8" Margin="1,0,9,12" VerticalAlignment="Center" Fill="{DynamicResource DimBrush}" />
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-          <TextBlock Text="Usage" FontSize="14" FontWeight="SemiBold" Height="17" />
-          <TextBlock x:Name="ConnectionLabel" Text="Loading local usage..." FontSize="10" Foreground="{DynamicResource MutedBrush}" Height="14" TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="Usage" FontSize="16" FontWeight="SemiBold" Height="20" />
+          <TextBlock x:Name="ConnectionLabel" Text="Loading local usage..." FontSize="11" Foreground="{DynamicResource MutedBrush}" Height="16" TextTrimming="CharacterEllipsis" />
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top">
           <Button x:Name="DashboardButton" Content="&#x2197;" Style="{StaticResource IconButtonStyle}" ToolTip="Open full OpenCodex dashboard" AutomationProperties.Name="Open full OpenCodex dashboard" />
+          <Button x:Name="PositionButton" Content="&#x2196;" Style="{StaticResource IconButtonStyle}" ToolTip="Move popup to top left" AutomationProperties.Name="Change popup corner" />
+          <Button x:Name="CollapseButton" Content="&#x25B4;" Style="{StaticResource IconButtonStyle}" ToolTip="Collapse to current account" AutomationProperties.Name="Collapse usage details" />
           <Button x:Name="RefreshButton" Content="&#x21BB;" Style="{StaticResource IconButtonStyle}" ToolTip="Refresh usage and task status" AutomationProperties.Name="Refresh usage" />
           <Button x:Name="CloseButton" Content="&#x00D7;" Style="{StaticResource IconButtonStyle}" ToolTip="Hide usage" AutomationProperties.Name="Hide usage" />
         </StackPanel>
       </Grid>
 
-      <Border Height="30" Margin="0,4,0,7" Background="{DynamicResource SegmentBrush}" CornerRadius="7" Padding="1">
+      <Border Height="32" Margin="0,6,0,8" Background="{DynamicResource SegmentBrush}" CornerRadius="6" Padding="1">
         <UniformGrid Rows="1" Columns="3">
           <Button x:Name="SwitchButton1" Content="-" Style="{StaticResource SegmentButtonStyle}" Visibility="Collapsed" />
           <Button x:Name="SwitchButton2" Content="-" Style="{StaticResource SegmentButtonStyle}" Visibility="Collapsed" />
@@ -431,26 +491,35 @@ $xaml = @'
         <Border x:Name="AccountCard1" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="94" />
               <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="12" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-              <TextBlock x:Name="AccountName1" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-              <TextBlock x:Name="AccountMeta1" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            <Border x:Name="AccountRail1" Width="2" Margin="0,7,0,7" HorizontalAlignment="Left" Background="Transparent" CornerRadius="1" />
+            <StackPanel Grid.Column="0" Margin="6,0,4,0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName1" Text="-" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta1" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
             <Grid Grid.Column="1" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue1" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="FiveBar1" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="FiveReset1" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5-hour" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue1" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="FiveBar1" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="FiveFillColumn1" Width="0*" /><ColumnDefinition x:Name="FiveEmptyColumn1" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="FiveFill1" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="FiveReset1" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
             <Grid Grid.Column="3" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue1" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="WeekBar1" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="WeekReset1" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="Weekly" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue1" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="WeekBar1" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="WeekFillColumn1" Width="0*" /><ColumnDefinition x:Name="WeekEmptyColumn1" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="WeekFill1" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="WeekReset1" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
           </Grid>
         </Border>
@@ -458,26 +527,35 @@ $xaml = @'
         <Border x:Name="AccountCard2" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="94" />
               <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="12" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-              <TextBlock x:Name="AccountName2" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-              <TextBlock x:Name="AccountMeta2" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            <Border x:Name="AccountRail2" Width="2" Margin="0,7,0,7" HorizontalAlignment="Left" Background="Transparent" CornerRadius="1" />
+            <StackPanel Grid.Column="0" Margin="6,0,4,0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName2" Text="-" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta2" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
             <Grid Grid.Column="1" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue2" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="FiveBar2" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="FiveReset2" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5-hour" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue2" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="FiveBar2" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="FiveFillColumn2" Width="0*" /><ColumnDefinition x:Name="FiveEmptyColumn2" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="FiveFill2" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="FiveReset2" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
             <Grid Grid.Column="3" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue2" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="WeekBar2" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="WeekReset2" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="Weekly" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue2" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="WeekBar2" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="WeekFillColumn2" Width="0*" /><ColumnDefinition x:Name="WeekEmptyColumn2" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="WeekFill2" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="WeekReset2" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
           </Grid>
         </Border>
@@ -485,55 +563,72 @@ $xaml = @'
         <Border x:Name="AccountCard3" Style="{StaticResource AccountCardStyle}" Visibility="Collapsed">
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="82" />
+              <ColumnDefinition Width="94" />
               <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="12" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-              <TextBlock x:Name="AccountName3" Text="-" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-              <TextBlock x:Name="AccountMeta3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+            <Border x:Name="AccountRail3" Width="2" Margin="0,7,0,7" HorizontalAlignment="Left" Background="Transparent" CornerRadius="1" />
+            <StackPanel Grid.Column="0" Margin="6,0,4,0" VerticalAlignment="Center">
+              <TextBlock x:Name="AccountName3" Text="-" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock x:Name="AccountMeta3" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
             <Grid Grid.Column="1" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="5h" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue3" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="FiveBar3" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="FiveReset3" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="5-hour" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="FiveValue3" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="FiveBar3" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="FiveFillColumn3" Width="0*" /><ColumnDefinition x:Name="FiveEmptyColumn3" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="FiveFill3" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="FiveReset3" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
             <Grid Grid.Column="3" VerticalAlignment="Center">
-              <Grid.RowDefinitions><RowDefinition Height="15" /><RowDefinition Height="7" /><RowDefinition Height="14" /></Grid.RowDefinitions>
-              <Grid Grid.Row="0"><TextBlock Text="1w" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue3" Text="-" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-              <ProgressBar x:Name="WeekBar3" Grid.Row="1" Style="{StaticResource QuotaProgressStyle}" />
-              <TextBlock x:Name="WeekReset3" Grid.Row="2" Text="reset unknown" FontSize="9" Foreground="{DynamicResource DimBrush}" />
+              <Grid.RowDefinitions><RowDefinition Height="18" /><RowDefinition Height="8" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+              <Grid Grid.Row="0"><TextBlock Text="Weekly" FontSize="11" Foreground="{DynamicResource MutedBrush}" /><TextBlock x:Name="WeekValue3" Text="-" FontSize="11.5" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
+              <Grid x:Name="WeekBar3" Grid.Row="1" Height="6" ClipToBounds="True">
+                <Grid.ColumnDefinitions><ColumnDefinition x:Name="WeekFillColumn3" Width="0*" /><ColumnDefinition x:Name="WeekEmptyColumn3" Width="100*" /></Grid.ColumnDefinitions>
+                <Border Grid.ColumnSpan="2" Background="{DynamicResource TrackBrush}" CornerRadius="3" />
+                <Border x:Name="WeekFill3" Grid.Column="0" Background="{DynamicResource GreenBrush}" CornerRadius="3" />
+              </Grid>
+              <TextBlock x:Name="WeekReset3" Grid.Row="2" Text="reset unknown" FontSize="10" Foreground="{DynamicResource DimBrush}" />
             </Grid>
           </Grid>
         </Border>
       </StackPanel>
 
-      <Grid Height="20" Margin="2,1,2,0">
-        <TextBlock Text="Tasks" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource DimBrush}" />
-        <TextBlock x:Name="FreshnessLabel" Text="waiting for data" FontSize="9.5" Foreground="{DynamicResource DimBrush}" HorizontalAlignment="Right" />
+      <Grid Height="24" Margin="2,3,2,0">
+        <TextBlock Text="Tasks" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource DimBrush}" />
+        <TextBlock x:Name="FreshnessLabel" Text="waiting for data" FontSize="10.5" Foreground="{DynamicResource DimBrush}" HorizontalAlignment="Right" />
       </Grid>
 
       <StackPanel x:Name="TaskPanel">
-        <Grid x:Name="TaskRow1" Height="23" Visibility="Collapsed">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /><ColumnDefinition Width="54" /></Grid.ColumnDefinitions>
+        <Grid x:Name="TaskRow1" Height="27" Visibility="Collapsed">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="66" /><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /></Grid.ColumnDefinitions>
           <Ellipse x:Name="TaskDot1" Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource DimBrush}" />
-          <TextBlock x:Name="TaskAccount1" Grid.Column="1" Text="-" FontSize="9.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
-          <TextBlock x:Name="TaskTitle1" Grid.Column="2" Text="-" FontSize="10" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
-          <TextBlock x:Name="TaskTokens1" Grid.Column="3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
+          <TextBlock x:Name="TaskAccount1" Grid.Column="1" Text="-" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTitle1" Grid.Column="2" Text="-" FontSize="11.5" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTokens1" Grid.Column="3" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
         </Grid>
-        <Grid x:Name="TaskRow2" Height="23" Visibility="Collapsed">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /><ColumnDefinition Width="54" /></Grid.ColumnDefinitions>
+        <Grid x:Name="TaskRow2" Height="27" Visibility="Collapsed">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="66" /><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /></Grid.ColumnDefinitions>
           <Ellipse x:Name="TaskDot2" Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource DimBrush}" />
-          <TextBlock x:Name="TaskAccount2" Grid.Column="1" Text="-" FontSize="9.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
-          <TextBlock x:Name="TaskTitle2" Grid.Column="2" Text="-" FontSize="10" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
-          <TextBlock x:Name="TaskTokens2" Grid.Column="3" Text="-" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
+          <TextBlock x:Name="TaskAccount2" Grid.Column="1" Text="-" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTitle2" Grid.Column="2" Text="-" FontSize="11.5" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTokens2" Grid.Column="3" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
         </Grid>
-        <TextBlock x:Name="MoreTasksLabel" Height="16" Text="" FontSize="9.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center" Visibility="Collapsed" />
-        <TextBlock x:Name="EmptyTasksLabel" Height="23" Text="No live or recent tasks" FontSize="10" Foreground="{DynamicResource MutedBrush}" TextAlignment="Center" />
+        <Grid x:Name="TaskRow3" Height="27" Visibility="Collapsed">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="14" /><ColumnDefinition Width="66" /><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /></Grid.ColumnDefinitions>
+          <Ellipse x:Name="TaskDot3" Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource DimBrush}" />
+          <TextBlock x:Name="TaskAccount3" Grid.Column="1" Text="-" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTitle3" Grid.Column="2" Text="-" FontSize="11.5" Margin="2,0,8,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock x:Name="TaskTokens3" Grid.Column="3" Text="-" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Right" />
+        </Grid>
+        <TextBlock x:Name="MoreTasksLabel" Height="18" Text="" FontSize="10.5" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center" Visibility="Collapsed" />
+        <TextBlock x:Name="EmptyTasksLabel" Height="27" Text="No live or recent tasks" FontSize="11.5" Foreground="{DynamicResource MutedBrush}" TextAlignment="Center" />
       </StackPanel>
-    </StackPanel>
+      </StackPanel>
+    </Grid>
   </Border>
 </Window>
 '@
@@ -554,10 +649,29 @@ function Find-UiElement {
 }
 
 $rootSurface = Find-UiElement "RootSurface"
+$compactPanel = Find-UiElement "CompactPanel"
+$expandedPanel = Find-UiElement "ExpandedPanel"
+$compactConnectionDot = Find-UiElement "CompactConnectionDot"
+$compactAccount = Find-UiElement "CompactAccount"
+$compactMeta = Find-UiElement "CompactMeta"
+$compactFiveValue = Find-UiElement "CompactFiveValue"
+$compactFiveBar = Find-UiElement "CompactFiveBar"
+$compactFiveFill = Find-UiElement "CompactFiveFill"
+$compactFiveFillColumn = Find-UiElement "CompactFiveFillColumn"
+$compactFiveEmptyColumn = Find-UiElement "CompactFiveEmptyColumn"
+$compactWeekValue = Find-UiElement "CompactWeekValue"
+$compactWeekBar = Find-UiElement "CompactWeekBar"
+$compactWeekFill = Find-UiElement "CompactWeekFill"
+$compactWeekFillColumn = Find-UiElement "CompactWeekFillColumn"
+$compactWeekEmptyColumn = Find-UiElement "CompactWeekEmptyColumn"
+$compactDashboardButton = Find-UiElement "CompactDashboardButton"
+$expandButton = Find-UiElement "ExpandButton"
 $connectionDot = Find-UiElement "ConnectionDot"
 $connectionLabel = Find-UiElement "ConnectionLabel"
 $freshnessLabel = Find-UiElement "FreshnessLabel"
 $dashboardButton = Find-UiElement "DashboardButton"
+$positionButton = Find-UiElement "PositionButton"
+$collapseButton = Find-UiElement "CollapseButton"
 $refreshButton = Find-UiElement "RefreshButton"
 $closeButton = Find-UiElement "CloseButton"
 $emptyTasksLabel = Find-UiElement "EmptyTasksLabel"
@@ -573,19 +687,26 @@ $script:accountRows = @()
 for ($index = 1; $index -le 3; $index++) {
   $script:accountRows += [pscustomobject]@{
     Card = Find-UiElement "AccountCard$index"
+    Rail = Find-UiElement "AccountRail$index"
     Name = Find-UiElement "AccountName$index"
     Meta = Find-UiElement "AccountMeta$index"
     FiveValue = Find-UiElement "FiveValue$index"
     FiveBar = Find-UiElement "FiveBar$index"
+    FiveFill = Find-UiElement "FiveFill$index"
+    FiveFillColumn = Find-UiElement "FiveFillColumn$index"
+    FiveEmptyColumn = Find-UiElement "FiveEmptyColumn$index"
     FiveReset = Find-UiElement "FiveReset$index"
     WeekValue = Find-UiElement "WeekValue$index"
     WeekBar = Find-UiElement "WeekBar$index"
+    WeekFill = Find-UiElement "WeekFill$index"
+    WeekFillColumn = Find-UiElement "WeekFillColumn$index"
+    WeekEmptyColumn = Find-UiElement "WeekEmptyColumn$index"
     WeekReset = Find-UiElement "WeekReset$index"
   }
 }
 
 $script:taskRows = @()
-for ($index = 1; $index -le 2; $index++) {
+for ($index = 1; $index -le 3; $index++) {
   $script:taskRows += [pscustomobject]@{
     Row = Find-UiElement "TaskRow$index"
     Dot = Find-UiElement "TaskDot$index"
@@ -642,6 +763,12 @@ $menu = [System.Windows.Forms.ContextMenuStrip]::new()
 $showItem = $menu.Items.Add("Show usage")
 $refreshItem = $menu.Items.Add("Refresh now")
 $dashboardItem = $menu.Items.Add("Open OpenCodex dashboard")
+$positionMenu = [System.Windows.Forms.ToolStripMenuItem]::new("Popup corner")
+$positionLeftItem = [System.Windows.Forms.ToolStripMenuItem]::new("Top left")
+$positionBottomItem = [System.Windows.Forms.ToolStripMenuItem]::new("Bottom left")
+[void]$positionMenu.DropDownItems.Add($positionLeftItem)
+[void]$positionMenu.DropDownItems.Add($positionBottomItem)
+[void]$menu.Items.Add($positionMenu)
 [void]$menu.Items.Add([System.Windows.Forms.ToolStripSeparator]::new())
 $startupItem = $menu.Items.Add("Starts with Windows")
 $startupItem.Checked = $true
@@ -661,6 +788,9 @@ $script:lastForcedRefreshAt = [DateTime]::MinValue
 $script:isConnected = $false
 $script:confirmedActiveLabel = $null
 $script:exiting = $false
+$script:isExpanded = $false
+$script:compactWidth = 316.0
+$script:expandedWidth = 428.0
 $script:popupRequestedVisible = $false
 $script:autoHiddenForFocus = $false
 $script:lastForegroundHandle = [IntPtr]::Zero
@@ -745,6 +875,8 @@ function Write-Heartbeat {
       requestedVisible = $script:popupRequestedVisible
       autoHiddenForFocus = $script:autoHiddenForFocus
       foregroundContext = $script:lastForegroundContext
+      popupCorner = $script:popupCorner
+      expanded = $script:isExpanded
       activeAccount = if (-not [string]::IsNullOrWhiteSpace($script:confirmedActiveLabel)) { $script:confirmedActiveLabel } elseif ($script:lastData) { [string]$script:lastData.activeAccountLabel } else { $null }
       runningTasks = if ($script:lastData) { [int]$script:lastData.counts.running } else { $null }
       connected = [bool]$script:isConnected
@@ -762,6 +894,7 @@ function Set-BusyState {
     $connectionLabel.Text = $Message
     $connectionLabel.Foreground = $window.Resources["MutedBrush"]
     $connectionDot.Fill = $window.Resources["AccentBrush"]
+    $compactConnectionDot.Fill = $connectionDot.Fill
   }
 }
 
@@ -818,6 +951,7 @@ function Start-ProviderRequest {
     $connectionLabel.Text = "OpenCodex data unavailable"
     $connectionLabel.Foreground = $window.Resources["RedBrush"]
     $connectionDot.Fill = $window.Resources["RedBrush"]
+    $compactConnectionDot.Fill = $connectionDot.Fill
     $freshnessLabel.Text = $_.Exception.Message
     Write-Heartbeat
   }
@@ -854,6 +988,30 @@ function Update-Interface {
   $connectionLabel.Text = $metricParts -join "  |  "
   $connectionLabel.Foreground = $window.Resources["MutedBrush"]
   $connectionDot.Fill = if ($stalledCount -gt 0) { $window.Resources["AmberBrush"] } else { $window.Resources["GreenBrush"] }
+  $compactConnectionDot.Fill = $connectionDot.Fill
+
+  if ($null -ne $activeAccount) {
+    $compactAccount.Text = $activeLabel
+    $activePlan = ([string]$activeAccount.plan).ToLowerInvariant()
+    $compactMeta.Text = $activePlan
+    $compactFivePercent = $activeAccount.fiveHour.usedPercent
+    $compactFiveReset = Format-ResetCountdown $activeAccount.fiveHour.resetAt
+    $compactFiveValue.Text = Format-Percent $compactFivePercent
+    $compactFiveValue.Foreground = Get-QuotaBrush $compactFivePercent
+    Set-QuotaMeter $compactFiveBar $compactFiveFill $compactFiveFillColumn $compactFiveEmptyColumn $compactFivePercent "5-hour window | $(Format-Percent $compactFivePercent) used | $compactFiveReset"
+    $compactWeekPercent = $activeAccount.week.usedPercent
+    $compactWeekReset = Format-ResetCountdown $activeAccount.week.resetAt
+    $compactWeekValue.Text = Format-Percent $compactWeekPercent
+    $compactWeekValue.Foreground = Get-QuotaBrush $compactWeekPercent
+    Set-QuotaMeter $compactWeekBar $compactWeekFill $compactWeekFillColumn $compactWeekEmptyColumn $compactWeekPercent "Weekly window | $(Format-Percent $compactWeekPercent) used | $compactWeekReset"
+  } else {
+    $compactAccount.Text = "No account"
+    $compactMeta.Text = "OpenCodex"
+    $compactFiveValue.Text = "--"
+    $compactWeekValue.Text = "--"
+    Set-QuotaMeter $compactFiveBar $compactFiveFill $compactFiveFillColumn $compactFiveEmptyColumn $null "5-hour usage unavailable"
+    Set-QuotaMeter $compactWeekBar $compactWeekFill $compactWeekFillColumn $compactWeekEmptyColumn $null "Weekly usage unavailable"
+  }
 
   for ($index = 0; $index -lt 3; $index++) {
     $button = $script:switchButtons[$index]
@@ -876,8 +1034,9 @@ function Update-Interface {
 
     $row.Card.Visibility = [System.Windows.Visibility]::Visible
     $row.Card.Background = if ($isActive) { $window.Resources["ActiveSurfaceBrush"] } else { $window.Resources["CardBrush"] }
-    $row.Card.BorderBrush = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
-    $row.Card.BorderThickness = if ($isActive) { [System.Windows.Thickness]::new(2, 0, 0, 0) } else { [System.Windows.Thickness]::new(0) }
+    $row.Card.BorderBrush = $window.Resources["BorderBrush"]
+    $row.Card.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+    $row.Rail.Background = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
     $row.Card.ToolTip = "$($accountData.email) | $($accountData.health)"
     $row.Name.Text = $displayName
     $row.Name.Foreground = if ($isActive) { $window.Resources["TextBrush"] } else { $window.Resources["RowTextBrush"] }
@@ -888,25 +1047,21 @@ function Update-Interface {
     $fiveReset = Format-ResetCountdown $accountData.fiveHour.resetAt
     $row.FiveValue.Text = "$(Format-Percent $fivePercent) used"
     $row.FiveValue.Foreground = Get-QuotaBrush $fivePercent
-    $row.FiveBar.Value = if ($null -eq $fivePercent) { 0 } else { [Math]::Max(0, [Math]::Min(100, [double]$fivePercent)) }
-    $row.FiveBar.Foreground = Get-QuotaBrush $fivePercent
     $row.FiveReset.Text = $fiveReset
-    $row.FiveBar.ToolTip = "5-hour window | $(Format-Percent $fivePercent) used | $fiveReset"
+    Set-QuotaMeter $row.FiveBar $row.FiveFill $row.FiveFillColumn $row.FiveEmptyColumn $fivePercent "5-hour window | $(Format-Percent $fivePercent) used | $fiveReset"
 
     $weekPercent = $accountData.week.usedPercent
     $weekReset = Format-ResetCountdown $accountData.week.resetAt
     $row.WeekValue.Text = "$(Format-Percent $weekPercent) used"
     $row.WeekValue.Foreground = Get-QuotaBrush $weekPercent
-    $row.WeekBar.Value = if ($null -eq $weekPercent) { 0 } else { [Math]::Max(0, [Math]::Min(100, [double]$weekPercent)) }
-    $row.WeekBar.Foreground = Get-QuotaBrush $weekPercent
     $row.WeekReset.Text = $weekReset
-    $row.WeekBar.ToolTip = "Weekly window | $(Format-Percent $weekPercent) used | $weekReset"
+    Set-QuotaMeter $row.WeekBar $row.WeekFill $row.WeekFillColumn $row.WeekEmptyColumn $weekPercent "Weekly window | $(Format-Percent $weekPercent) used | $weekReset"
   }
 
   $allTasks = @($Data.tasks)
-  $tasks = @($allTasks | Select-Object -First 2)
+  $tasks = @($allTasks | Select-Object -First 3)
   $emptyTasksLabel.Visibility = if ($tasks.Count -eq 0) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
-  for ($index = 0; $index -lt 2; $index++) {
+  for ($index = 0; $index -lt 3; $index++) {
     $taskRow = $script:taskRows[$index]
     if ($index -ge $tasks.Count) {
       $taskRow.Row.Visibility = [System.Windows.Visibility]::Collapsed
@@ -933,7 +1088,7 @@ function Update-Interface {
     $taskRow.Tokens.ToolTip = "$(Format-CompactNumber ([double]$task.tokensUsed)) tokens"
   }
 
-  $moreCount = [Math]::Max(0, $allTasks.Count - 2)
+  $moreCount = [Math]::Max(0, $allTasks.Count - 3)
   if ($moreCount -gt 0) {
     $moreTasksLabel.Text = "+$moreCount more in dashboard"
     $moreTasksLabel.Visibility = [System.Windows.Visibility]::Visible
@@ -973,14 +1128,24 @@ function Show-ConfirmedSwitchWithoutStatus {
     }
     if ($row.Card.Visibility -eq [System.Windows.Visibility]::Visible) {
       $row.Card.Background = if ($isActive) { $window.Resources["ActiveSurfaceBrush"] } else { $window.Resources["CardBrush"] }
-      $row.Card.BorderBrush = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
-      $row.Card.BorderThickness = if ($isActive) { [System.Windows.Thickness]::new(2, 0, 0, 0) } else { [System.Windows.Thickness]::new(0) }
+      $row.Card.BorderBrush = $window.Resources["BorderBrush"]
+      $row.Card.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+      $row.Rail.Background = if ($isActive) { $window.Resources["AccentBrush"] } else { $window.Resources["CardBrush"] }
     }
   }
 
   $connectionLabel.Text = "$accountLabel active | usage refresh pending"
   $connectionLabel.Foreground = $window.Resources["AmberBrush"]
   $connectionDot.Fill = $window.Resources["AmberBrush"]
+  $compactConnectionDot.Fill = $connectionDot.Fill
+  $compactAccount.Text = $accountLabel
+  $compactMeta.Text = "usage refresh pending"
+  $compactFiveValue.Text = "--"
+  $compactFiveValue.Foreground = $window.Resources["DimBrush"]
+  $compactWeekValue.Text = "--"
+  $compactWeekValue.Foreground = $window.Resources["DimBrush"]
+  Set-QuotaMeter $compactFiveBar $compactFiveFill $compactFiveFillColumn $compactFiveEmptyColumn $null "5-hour usage refresh pending"
+  Set-QuotaMeter $compactWeekBar $compactWeekFill $compactWeekFillColumn $compactWeekEmptyColumn $null "Weekly usage refresh pending"
   $freshnessLabel.Text = "retrying | local"
   $notify.Icon = $warningIcon
   $notify.Text = "OpenCodex: $accountLabel | usage refresh pending"
@@ -1019,6 +1184,7 @@ function Complete-ProviderRequest {
     $connectionLabel.Text = "OpenCodex data unavailable"
     $connectionLabel.Foreground = $window.Resources["RedBrush"]
     $connectionDot.Fill = $window.Resources["RedBrush"]
+    $compactConnectionDot.Fill = $connectionDot.Fill
     $freshnessLabel.Text = "refresh failed | local"
     $freshnessLabel.ToolTip = $message
     $notify.Icon = $warningIcon
@@ -1047,6 +1213,7 @@ function Complete-ProviderRequest {
     $connectionLabel.Text = "OpenCodex data unavailable"
     $connectionLabel.Foreground = $window.Resources["RedBrush"]
     $connectionDot.Fill = $window.Resources["RedBrush"]
+    $compactConnectionDot.Fill = $connectionDot.Fill
     $freshnessLabel.Text = "response unreadable | local"
     $notify.Icon = $warningIcon
     Write-Heartbeat
@@ -1082,22 +1249,28 @@ function Position-Popup {
   $workTop = $workingArea.Top / $scale
   $workRight = $workingArea.Right / $scale
   $workBottom = $workingArea.Bottom / $scale
-  $x = $workRight - $popupWidth - 8
-  $y = $workBottom - $popupHeight - 8
+  $x = $workLeft + 8
+  $y = if ($script:popupCorner -eq "TopLeft") { $workTop + 8 } else { $workBottom - $popupHeight - 8 }
 
   if ($AnchorWindow -ne [IntPtr]::Zero) {
     $windowRect = [OpenCodexWindowRect]::new()
     if ([OpenCodexFocusNative]::GetWindowRect($AnchorWindow, [ref]$windowRect)) {
       $anchorLeft = $windowRect.Left / $scale
+      $anchorTop = $windowRect.Top / $scale
       $anchorRight = $windowRect.Right / $scale
       $anchorBottom = $windowRect.Bottom / $scale
       $leftInset = 286
       $rightReserve = 500
       $edgeGap = 12
-      $preferredX = $anchorLeft + $leftInset
+      $topInset = 96
+      $leftX = $anchorLeft + $leftInset
       $browserSafeMaxX = $anchorRight - $rightReserve - $popupWidth - $edgeGap
-      $x = if ($browserSafeMaxX -ge ($anchorLeft + $edgeGap)) { [Math]::Min($preferredX, $browserSafeMaxX) } else { $anchorLeft + $edgeGap }
-      $y = $anchorBottom - $popupHeight - $edgeGap
+      if ($browserSafeMaxX -ge ($anchorLeft + $edgeGap)) {
+        $x = [Math]::Min($leftX, $browserSafeMaxX)
+      } else {
+        $x = $anchorLeft + $edgeGap
+      }
+      $y = if ($script:popupCorner -eq "TopLeft") { $anchorTop + $topInset } else { $anchorBottom - $popupHeight - $edgeGap }
     }
   }
 
@@ -1105,6 +1278,44 @@ function Position-Popup {
   $maxY = $workBottom - $popupHeight - 8
   $window.Left = [Math]::Max($workLeft + 8, [Math]::Min($x, $maxX))
   $window.Top = [Math]::Max($workTop + 8, [Math]::Min($y, $maxY))
+}
+
+function Set-DisplayMode {
+  param([bool]$Expanded)
+  $script:isExpanded = $Expanded
+  $compactPanel.Visibility = if ($Expanded) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
+  $expandedPanel.Visibility = if ($Expanded) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+  $window.Width = if ($Expanded) { $script:expandedWidth } else { $script:compactWidth }
+  $rootSurface.Padding = if ($Expanded) { [System.Windows.Thickness]::new(12) } else { [System.Windows.Thickness]::new(8) }
+  $window.UpdateLayout()
+  if ($window.IsVisible) { Position-Popup -AnchorWindow $script:lastCodexWindowHandle }
+  Write-Heartbeat
+}
+
+function Update-PositionControls {
+  $isTop = $script:popupCorner -eq "TopLeft"
+  $positionLeftItem.Checked = $isTop
+  $positionBottomItem.Checked = -not $isTop
+  if (-not $isTop) {
+    $positionButton.Content = [char]0x2196
+    $positionButton.ToolTip = "Popup corner: bottom left. Click to move to top left"
+    [System.Windows.Automation.AutomationProperties]::SetName($positionButton, "Move popup to top left")
+  } else {
+    $positionButton.Content = [char]0x2199
+    $positionButton.ToolTip = "Popup corner: top left. Click to move to bottom left"
+    [System.Windows.Automation.AutomationProperties]::SetName($positionButton, "Move popup to bottom left")
+  }
+}
+
+function Set-PopupCorner {
+  param([ValidateSet("TopLeft", "BottomLeft")][string]$Corner)
+  if ($script:popupCorner -ne $Corner) {
+    $script:popupCorner = $Corner
+    Save-TraySettings
+  }
+  Update-PositionControls
+  if ($window.IsVisible) { Position-Popup -AnchorWindow $script:lastCodexWindowHandle }
+  Write-Heartbeat
 }
 
 function Show-Popup {
@@ -1172,6 +1383,9 @@ $openDashboard = {
   try { Start-Process (Get-OpenCodexDashboardUrl) | Out-Null } catch { }
 }
 
+Set-DisplayMode $false
+Update-PositionControls
+
 foreach ($button in $script:switchButtons) {
   $button.Add_Click({
     param($sender, $eventArgs)
@@ -1184,6 +1398,12 @@ foreach ($button in $script:switchButtons) {
 
 $refreshButton.Add_Click({ Start-ProviderRequest -Operation "status" -Force })
 $dashboardButton.Add_Click($openDashboard)
+$compactDashboardButton.Add_Click($openDashboard)
+$expandButton.Add_Click({ Set-DisplayMode $true })
+$collapseButton.Add_Click({ Set-DisplayMode $false })
+$positionButton.Add_Click({
+  Set-PopupCorner $(if ($script:popupCorner -eq "TopLeft") { "BottomLeft" } else { "TopLeft" })
+})
 $closeButton.Add_Click({ Hide-Popup })
 $window.Add_KeyDown({
   param($sender, $eventArgs)
@@ -1207,6 +1427,8 @@ $notify.add_MouseClick({
 $showItem.add_Click({ Toggle-Popup })
 $refreshItem.add_Click({ Start-ProviderRequest -Operation "status" -Force })
 $dashboardItem.add_Click($openDashboard)
+$positionLeftItem.add_Click({ Set-PopupCorner "TopLeft" })
+$positionBottomItem.add_Click({ Set-PopupCorner "BottomLeft" })
 
 $application = [System.Windows.Application]::new()
 $application.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown

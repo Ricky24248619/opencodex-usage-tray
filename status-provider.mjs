@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 const codexRoot = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
@@ -153,6 +154,30 @@ function taskAccountFromModel(model, knownLabels) {
   return knownLabels.has(prefix) ? prefix : null;
 }
 
+export function projectQuota(quotaValue) {
+  const quota = quotaValue && typeof quotaValue === "object" ? quotaValue : {};
+  const fiveHourPercent = Number.isFinite(quota.fiveHourPercent)
+    ? quota.fiveHourPercent
+    : Number.isFinite(quota.shortPercent) ? quota.shortPercent : null;
+  const fiveHourResetAt = Number.isFinite(quota.fiveHourResetAt)
+    ? quota.fiveHourResetAt
+    : quota.shortResetAt;
+  const fiveHourWindowSeconds = Number.isFinite(quota.fiveHourWindowSeconds)
+    ? quota.fiveHourWindowSeconds
+    : Number.isFinite(quota.shortWindowSeconds) ? quota.shortWindowSeconds : 18_000;
+  return {
+    fiveHour: {
+      usedPercent: fiveHourPercent,
+      resetAt: epochMilliseconds(fiveHourResetAt),
+      windowSeconds: fiveHourWindowSeconds,
+    },
+    week: {
+      usedPercent: Number.isFinite(quota.weeklyPercent) ? quota.weeklyPercent : null,
+      resetAt: epochMilliseconds(quota.weeklyResetAt),
+    },
+  };
+}
+
 function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const rawAccounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
@@ -252,7 +277,7 @@ function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload
   const accounts = rawAccounts.map((account, index) => {
     const label = String(account.logLabel || (account.isMain ? "main" : `account-${index + 1}`));
     const usage = usageByAccount.get(label) || {};
-    const quota = account.quota && typeof account.quota === "object" ? account.quota : {};
+    const projectedQuota = projectQuota(account.quota);
     const alias = typeof account.alias === "string" && account.alias.trim() ? account.alias.trim() : null;
     return {
       id: String(account.id),
@@ -266,15 +291,7 @@ function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload
       needsReauth: account.needsReauth === true,
       health: typeof account.healthLabel === "string" ? account.healthLabel : "unknown",
       priority: Number(account.priority || 0),
-      fiveHour: {
-        usedPercent: Number.isFinite(quota.shortPercent) ? quota.shortPercent : null,
-        resetAt: epochMilliseconds(quota.shortResetAt),
-        windowSeconds: Number.isFinite(quota.shortWindowSeconds) ? quota.shortWindowSeconds : 18_000,
-      },
-      week: {
-        usedPercent: Number.isFinite(quota.weeklyPercent) ? quota.weeklyPercent : null,
-        resetAt: epochMilliseconds(quota.weeklyResetAt),
-      },
+      ...projectedQuota,
       tokens7d: Number(usage.totalTokens || 0),
       requests7d: Number(usage.requests || 0),
       coverage: Number.isFinite(usage.usageCoverageRatio) ? usage.usageCoverageRatio : null,
@@ -370,7 +387,9 @@ async function main() {
   throw new Error(`Unknown command: ${command}`);
 }
 
-main().catch(error => {
-  process.stderr.write(`${safeError(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {
+    process.stderr.write(`${safeError(error)}\n`);
+    process.exitCode = 1;
+  });
+}

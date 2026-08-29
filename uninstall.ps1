@@ -20,7 +20,8 @@ $allowedFiles = @(
   "status-provider.mjs",
   "OpenCodexUsage.ico",
   "README.md",
-  "tray-heartbeat.json"
+  "tray-heartbeat.json",
+  "tray-settings.json"
 )
 
 function Assert-SafeInstallContents {
