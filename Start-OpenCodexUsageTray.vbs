@@ -1,8 +1,10 @@
 Option Explicit
 
-Dim shell, fso, scriptDir, powerShellPath, scriptPath, command
+Dim shell, fso, scriptDir, powerShellPath, scriptPath, command, waitForExit, exitCode
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
+
+waitForExit = WScript.Arguments.Named.Exists("supervise")
 
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 powerShellPath = shell.ExpandEnvironmentStrings("%SystemRoot%") & "\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -11,4 +13,12 @@ command = Chr(34) & powerShellPath & Chr(34) & _
   " -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File " & _
   Chr(34) & scriptPath & Chr(34) & " -ShowOnStart"
 
-shell.Run command, 0, False
+If waitForExit Then
+  Do
+    exitCode = shell.Run(command, 0, True)
+    If exitCode = 0 Then WScript.Quit 0
+    WScript.Sleep 30000
+  Loop
+Else
+  shell.Run command, 0, False
+End If

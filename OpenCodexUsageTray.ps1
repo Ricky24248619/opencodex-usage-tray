@@ -5,6 +5,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$startupErrorPath = Join-Path $scriptRoot "tray-startup-error.log"
+
+trap {
+  try {
+    $message = "{0} {1}`r`n" -f [DateTimeOffset]::Now.ToString("o"), $_.Exception.ToString()
+    [System.IO.File]::AppendAllText($startupErrorPath, $message, [System.Text.UTF8Encoding]::new($false))
+  } catch { }
+  exit 1
+}
 
 if ($Mode -eq "Stop") {
   $existingStopEvent = $null
@@ -64,20 +74,10 @@ Add-Type -TypeDefinition $nativeTypeDefinition
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $providerPath = Join-Path $scriptRoot "status-provider.mjs"
 $runtimeConfigPath = Join-Path $scriptRoot "runtime-config.json"
-$startupErrorPath = Join-Path $scriptRoot "tray-startup-error.log"
 $settingsRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OpenCodexUsageTray"
 $settingsPath = Join-Path $settingsRoot "tray-settings.json"
-
-trap {
-  try {
-    $message = "{0} {1}`r`n" -f [DateTimeOffset]::Now.ToString("o"), $_.Exception.Message
-    [System.IO.File]::AppendAllText($startupErrorPath, $message, [System.Text.UTF8Encoding]::new($false))
-  } catch { }
-  exit 1
-}
 
 $script:popupCorner = "BottomLeft"
 try {

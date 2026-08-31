@@ -42,6 +42,9 @@ if ([System.IO.File]::Exists($windowsPowerShell)) {
 $installRoot = Join-Path $env:LOCALAPPDATA "OpenCodexUsageTray"
 $installedApp = Join-Path $installRoot "OpenCodexUsageTray.ps1"
 $mutexName = "Local\OpenCodexUsageTray-v1"
+$scheduledTaskName = "OpenCodex Usage Tray"
+$startupRunPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$startupRunName = "OpenCodexUsageTray"
 $resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\')
 $resolvedLocalAppData = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
 $allowedInstallFiles = @(
@@ -78,6 +81,11 @@ function Assert-SafeInstallRoot {
 }
 
 Assert-SafeInstallRoot
+
+# Remove the unsuccessful Scheduled Task startup method from earlier builds.
+if (Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName $scheduledTaskName -Confirm:$false
+}
 
 function Test-TrayStopped {
   $createdNew = $false
@@ -168,33 +176,47 @@ function Save-Shortcut {
   $shortcut.Save()
 }
 
-Save-Shortcut $startupShortcutPath
+# Scheduled Tasks are more reliable than the Startup folder and can restart the
+# tray after a failure. Remove an older Startup shortcut so it cannot race the task.
+Remove-Item -LiteralPath $startupShortcutPath -Force -ErrorAction SilentlyContinue
 Save-Shortcut $startMenuShortcutPath
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
 
+$startupRunCommand = '"' + $wscriptPath + '" //B //NoLogo "' + $installedLauncher + '" /supervise'
+New-Item -Path $startupRunPath -Force | Out-Null
+New-ItemProperty `
+  -Path $startupRunPath `
+  -Name $startupRunName `
+  -PropertyType String `
+  -Value $startupRunCommand `
+  -Force | Out-Null
+
 $launchedPid = $null
+$supervisorPid = $null
 $started = $false
 $connected = $false
 if (-not $NoStart) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $powerShellPath
-  $psi.Arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $installedApp + '" -ShowOnStart'
+  $psi.FileName = $wscriptPath
+  $psi.Arguments = '//B //NoLogo "' + $installedLauncher + '" /supervise'
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-  $process = [System.Diagnostics.Process]::Start($psi)
-  if ($null -eq $process) { throw "The installed tray process did not start" }
-  $launchedPid = $process.Id
+  $supervisor = [System.Diagnostics.Process]::Start($psi)
+  if ($null -eq $supervisor) { throw "The installed tray supervisor did not start" }
+  $supervisorPid = $supervisor.Id
   $heartbeat = $null
   for ($attempt = 0; $attempt -lt 120; $attempt++) {
-    $process.Refresh()
-    if ($process.HasExited) {
-      throw "The installed tray process exited before becoming ready"
+    $supervisor.Refresh()
+    if ($supervisor.HasExited) {
+      throw "The installed tray supervisor exited before the tray became ready"
     }
     if (Test-Path -LiteralPath $installedHeartbeat) {
       try {
         $heartbeat = Get-Content -LiteralPath $installedHeartbeat -Raw | ConvertFrom-Json
-        if ([int]$heartbeat.pid -eq $launchedPid) {
+        $heartbeatProcess = Get-Process -Id ([int]$heartbeat.pid) -ErrorAction SilentlyContinue
+        if ($null -ne $heartbeatProcess) {
+          $launchedPid = [int]$heartbeat.pid
           $started = $true
           $connected = [bool]$heartbeat.connected
           if ($connected) { break }
@@ -204,16 +226,19 @@ if (-not $NoStart) {
     Start-Sleep -Milliseconds 100
   }
   if (-not $started) { throw "The installed tray process did not publish a readiness heartbeat" }
-  $process.Dispose()
+  $supervisor.Dispose()
 }
 
 [pscustomobject]@{
   Installed = $true
   InstallRoot = $installRoot
-  StartupShortcut = $startupShortcutPath
+  StartupRunValue = "$startupRunPath\$startupRunName"
+  RemovedLegacyScheduledTask = $scheduledTaskName
+  RemovedLegacyStartupShortcut = $startupShortcutPath
   StartMenuShortcut = $startMenuShortcutPath
   Node = $node.Source
   PowerShell = $powerShellPath
+  SupervisorPid = $supervisorPid
   LaunchedPid = $launchedPid
   Started = $started
   Connected = $connected

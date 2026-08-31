@@ -8,6 +8,9 @@ if ([System.IO.File]::Exists($windowsPowerShell)) {
 }
 
 $installRoot = Join-Path $env:LOCALAPPDATA "OpenCodexUsageTray"
+$scheduledTaskName = "OpenCodex Usage Tray"
+$startupRunPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$startupRunName = "OpenCodexUsageTray"
 $expectedRoot = [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\')
 $resolvedLocalAppData = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
 if (-not $expectedRoot.StartsWith($resolvedLocalAppData + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -73,6 +76,11 @@ function Wait-ForTrayStop {
 }
 
 Assert-SafeInstallContents
+# Disable automatic recovery before asking the current tray instance to stop.
+Remove-ItemProperty -Path $startupRunPath -Name $startupRunName -Force -ErrorAction SilentlyContinue
+if (Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName $scheduledTaskName -Confirm:$false
+}
 $installedApp = Join-Path $expectedRoot "OpenCodexUsageTray.ps1"
 $sourceApp = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "OpenCodexUsageTray.ps1"
 $stopScript = if (Test-Path -LiteralPath $installedApp) { $installedApp } else { $sourceApp }
@@ -104,6 +112,8 @@ if (Test-Path -LiteralPath $expectedRoot) {
 [pscustomobject]@{
   Uninstalled = $true
   RemovedInstallRoot = $expectedRoot
+  RemovedStartupRunValue = "$startupRunPath\$startupRunName"
+  RemovedLegacyScheduledTask = $scheduledTaskName
   RemovedStartupShortcut = $startupShortcutPath
   RemovedStartMenuShortcut = $startMenuShortcutPath
 }

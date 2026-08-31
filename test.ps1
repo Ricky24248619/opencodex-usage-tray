@@ -75,7 +75,10 @@ $launcherText = [System.IO.File]::ReadAllText($launcherPath)
 foreach ($requiredLauncherMapping in @(
   'WScript.Shell',
   '-WindowStyle Hidden',
-  'shell.Run command, 0, False'
+  'WScript.Arguments.Named.Exists("supervise")',
+  'exitCode = shell.Run(command, 0, True)',
+  'WScript.Sleep 30000',
+  'If exitCode = 0 Then WScript.Quit 0'
 )) {
   if (-not $launcherText.Contains($requiredLauncherMapping)) {
     throw "Missing required invisible-launcher mapping: $requiredLauncherMapping"
@@ -88,7 +91,13 @@ foreach ($requiredInstallMapping in @(
   '"runtime-config.json"',
   '"tray-startup-error.log"',
   'nodePath = $node.Source',
-  '[System.IO.File]::WriteAllText('
+  '[System.IO.File]::WriteAllText(',
+  '$startupRunPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"',
+  '$startupRunName = "OpenCodexUsageTray"',
+  'New-ItemProperty',
+  '$startupRunCommand',
+  '" /supervise',
+  'Remove-Item -LiteralPath $startupShortcutPath'
 )) {
   if (-not $installText.Contains($requiredInstallMapping)) {
     throw "Missing required install mapping: $requiredInstallMapping"
@@ -99,7 +108,9 @@ $uninstallPath = Join-Path $root "uninstall.ps1"
 $uninstallText = [System.IO.File]::ReadAllText($uninstallPath)
 foreach ($requiredUninstallMapping in @(
   '"runtime-config.json"',
-  '"tray-startup-error.log"'
+  '"tray-startup-error.log"',
+  'Remove-ItemProperty -Path $startupRunPath -Name $startupRunName',
+  'Unregister-ScheduledTask -TaskName $scheduledTaskName'
 )) {
   if (-not $uninstallText.Contains($requiredUninstallMapping)) {
     throw "Missing required uninstall mapping: $requiredUninstallMapping"
