@@ -5,6 +5,9 @@ Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
 waitForExit = WScript.Arguments.Named.Exists("supervise")
+If Not waitForExit And WScript.Arguments.Unnamed.Count > 0 Then
+  waitForExit = (LCase(WScript.Arguments.Unnamed(0)) = "supervise")
+End If
 
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 powerShellPath = shell.ExpandEnvironmentStrings("%SystemRoot%") & "\System32\WindowsPowerShell\v1.0\powershell.exe"

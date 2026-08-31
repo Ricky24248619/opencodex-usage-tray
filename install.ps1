@@ -82,10 +82,11 @@ function Assert-SafeInstallRoot {
 
 Assert-SafeInstallRoot
 
-# Remove the unsuccessful Scheduled Task startup method from earlier builds.
+# Remove startup mechanisms from older releases before replacing installed files.
 if (Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $scheduledTaskName -Confirm:$false
 }
+Remove-ItemProperty -Path $startupRunPath -Name $startupRunName -Force -ErrorAction SilentlyContinue
 
 function Test-TrayStopped {
   $createdNew = $false
@@ -168,7 +169,7 @@ function Save-Shortcut {
   param([string]$Path)
   $shortcut = $shell.CreateShortcut($Path)
   $shortcut.TargetPath = $wscriptPath
-  $shortcut.Arguments = '//B //NoLogo "' + $installedLauncher + '"'
+  $shortcut.Arguments = '//B //NoLogo "' + $installedLauncher + '" supervise'
   $shortcut.WorkingDirectory = $installRoot
   $shortcut.WindowStyle = 7
   $shortcut.Description = "OpenCodex usage, tasks, quota windows, and account switcher"
@@ -176,41 +177,18 @@ function Save-Shortcut {
   $shortcut.Save()
 }
 
-# Scheduled Tasks are more reliable than the Startup folder and can restart the
-# tray after a failure. Remove an older Startup shortcut so it cannot race the task.
-Remove-Item -LiteralPath $startupShortcutPath -Force -ErrorAction SilentlyContinue
+Save-Shortcut $startupShortcutPath
 Save-Shortcut $startMenuShortcutPath
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
-
-$startupRunCommand = '"' + $wscriptPath + '" //B //NoLogo "' + $installedLauncher + '" /supervise'
-New-Item -Path $startupRunPath -Force | Out-Null
-New-ItemProperty `
-  -Path $startupRunPath `
-  -Name $startupRunName `
-  -PropertyType String `
-  -Value $startupRunCommand `
-  -Force | Out-Null
 
 $launchedPid = $null
 $supervisorPid = $null
 $started = $false
 $connected = $false
 if (-not $NoStart) {
-  $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $wscriptPath
-  $psi.Arguments = '//B //NoLogo "' + $installedLauncher + '" /supervise'
-  $psi.UseShellExecute = $false
-  $psi.CreateNoWindow = $true
-  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-  $supervisor = [System.Diagnostics.Process]::Start($psi)
-  if ($null -eq $supervisor) { throw "The installed tray supervisor did not start" }
-  $supervisorPid = $supervisor.Id
+  Start-Process -FilePath $startupShortcutPath
   $heartbeat = $null
   for ($attempt = 0; $attempt -lt 120; $attempt++) {
-    $supervisor.Refresh()
-    if ($supervisor.HasExited) {
-      throw "The installed tray supervisor exited before the tray became ready"
-    }
     if (Test-Path -LiteralPath $installedHeartbeat) {
       try {
         $heartbeat = Get-Content -LiteralPath $installedHeartbeat -Raw | ConvertFrom-Json
@@ -225,16 +203,21 @@ if (-not $NoStart) {
     }
     Start-Sleep -Milliseconds 100
   }
-  if (-not $started) { throw "The installed tray process did not publish a readiness heartbeat" }
-  $supervisor.Dispose()
+  if (-not $started) {
+    throw "The installed tray did not publish a readiness heartbeat"
+  }
+  $supervisorPid = @(
+    Get-CimInstance Win32_Process | Where-Object {
+      $_.Name -eq "wscript.exe" -and $_.CommandLine -like "*$installedLauncher*"
+    } | Select-Object -ExpandProperty ProcessId
+  )[0]
 }
 
 [pscustomobject]@{
   Installed = $true
   InstallRoot = $installRoot
-  StartupRunValue = "$startupRunPath\$startupRunName"
-  RemovedLegacyScheduledTask = $scheduledTaskName
-  RemovedLegacyStartupShortcut = $startupShortcutPath
+  RemovedLegacyStartupRunValue = "$startupRunPath\$startupRunName"
+  StartupShortcut = $startupShortcutPath
   StartMenuShortcut = $startMenuShortcutPath
   Node = $node.Source
   PowerShell = $powerShellPath

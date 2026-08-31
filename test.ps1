@@ -76,6 +76,7 @@ foreach ($requiredLauncherMapping in @(
   'WScript.Shell',
   '-WindowStyle Hidden',
   'WScript.Arguments.Named.Exists("supervise")',
+  'WScript.Arguments.Unnamed(0)',
   'exitCode = shell.Run(command, 0, True)',
   'WScript.Sleep 30000',
   'If exitCode = 0 Then WScript.Quit 0'
@@ -92,12 +93,10 @@ foreach ($requiredInstallMapping in @(
   '"tray-startup-error.log"',
   'nodePath = $node.Source',
   '[System.IO.File]::WriteAllText(',
-  '$startupRunPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"',
-  '$startupRunName = "OpenCodexUsageTray"',
-  'New-ItemProperty',
-  '$startupRunCommand',
-  '" /supervise',
-  'Remove-Item -LiteralPath $startupShortcutPath'
+  'Save-Shortcut $startupShortcutPath',
+  'Start-Process -FilePath $startupShortcutPath',
+  '" supervise',
+  'Unregister-ScheduledTask -TaskName $scheduledTaskName'
 )) {
   if (-not $installText.Contains($requiredInstallMapping)) {
     throw "Missing required install mapping: $requiredInstallMapping"

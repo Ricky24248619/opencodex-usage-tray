@@ -112,8 +112,8 @@ if (Test-Path -LiteralPath $expectedRoot) {
 [pscustomobject]@{
   Uninstalled = $true
   RemovedInstallRoot = $expectedRoot
-  RemovedStartupRunValue = "$startupRunPath\$startupRunName"
-  RemovedLegacyScheduledTask = $scheduledTaskName
+  RemovedLegacyStartupRunValue = "$startupRunPath\$startupRunName"
+  RemovedScheduledTask = $scheduledTaskName
   RemovedStartupShortcut = $startupShortcutPath
   RemovedStartMenuShortcut = $startMenuShortcutPath
 }
