@@ -66,8 +66,19 @@ Add-Type -TypeDefinition $nativeTypeDefinition
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $providerPath = Join-Path $scriptRoot "status-provider.mjs"
+$runtimeConfigPath = Join-Path $scriptRoot "runtime-config.json"
+$startupErrorPath = Join-Path $scriptRoot "tray-startup-error.log"
 $settingsRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OpenCodexUsageTray"
 $settingsPath = Join-Path $settingsRoot "tray-settings.json"
+
+trap {
+  try {
+    $message = "{0} {1}`r`n" -f [DateTimeOffset]::Now.ToString("o"), $_.Exception.Message
+    [System.IO.File]::AppendAllText($startupErrorPath, $message, [System.Text.UTF8Encoding]::new($false))
+  } catch { }
+  exit 1
+}
+
 $script:popupCorner = "BottomLeft"
 try {
   if ([System.IO.File]::Exists($settingsPath)) {
@@ -117,9 +128,26 @@ if (-not $createdNew) {
   exit 0
 }
 
-$nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
-if ($null -eq $nodeCommand) { $nodeCommand = Get-Command node -ErrorAction Stop }
-$nodePath = $nodeCommand.Source
+function Resolve-NodePath {
+  try {
+    if ([System.IO.File]::Exists($runtimeConfigPath)) {
+      $runtimeConfig = [System.IO.File]::ReadAllText($runtimeConfigPath) | ConvertFrom-Json
+      $configuredNodePath = [string]$runtimeConfig.nodePath
+      if (
+        -not [string]::IsNullOrWhiteSpace($configuredNodePath) -and
+        [System.IO.File]::Exists($configuredNodePath)
+      ) {
+        return $configuredNodePath
+      }
+    }
+  } catch { }
+
+  $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+  if ($null -eq $nodeCommand) { $nodeCommand = Get-Command node -ErrorAction Stop }
+  return $nodeCommand.Source
+}
+
+$nodePath = Resolve-NodePath
 
 function Get-CodexDarkTheme {
   $configPath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\config.toml"
@@ -793,6 +821,7 @@ $script:compactWidth = 316.0
 $script:expandedWidth = 428.0
 $script:popupRequestedVisible = $false
 $script:autoHiddenForFocus = $false
+$script:popupFocusGraceUntil = [DateTime]::MinValue
 $script:lastForegroundHandle = [IntPtr]::Zero
 $script:lastForegroundContext = "other"
 $script:lastCodexWindowHandle = [IntPtr]::Zero
@@ -850,10 +879,12 @@ function Update-PopupFocusVisibility {
   if (-not $script:popupRequestedVisible) { return }
 
   if ($context -eq "other") {
+    if ([DateTime]::Now -lt $script:popupFocusGraceUntil) { return }
     if ($window.IsVisible) { Hide-Popup -ForFocus }
     return
   }
   if ($context -eq "codex") {
+    $script:popupFocusGraceUntil = [DateTime]::MinValue
     if (-not $window.IsVisible) {
       Show-Popup -ForFocusRestore -AnchorWindow $script:lastForegroundHandle
     } else {
@@ -875,6 +906,7 @@ function Write-Heartbeat {
       requestedVisible = $script:popupRequestedVisible
       autoHiddenForFocus = $script:autoHiddenForFocus
       foregroundContext = $script:lastForegroundContext
+      focusGraceUntil = if ([DateTime]::Now -lt $script:popupFocusGraceUntil) { [DateTimeOffset]::new($script:popupFocusGraceUntil).ToUnixTimeMilliseconds() } else { $null }
       popupCorner = $script:popupCorner
       expanded = $script:isExpanded
       activeAccount = if (-not [string]::IsNullOrWhiteSpace($script:confirmedActiveLabel)) { $script:confirmedActiveLabel } elseif ($script:lastData) { [string]$script:lastData.activeAccountLabel } else { $null }
@@ -1325,6 +1357,9 @@ function Show-Popup {
   )
   $script:popupRequestedVisible = $true
   $script:autoHiddenForFocus = $false
+  if (-not $ForFocusRestore) {
+    $script:popupFocusGraceUntil = [DateTime]::Now.AddSeconds(20)
+  }
   Sync-CodexTheme
 
   if (-not $window.IsVisible) {
@@ -1352,6 +1387,7 @@ function Hide-Popup {
   } else {
     $script:popupRequestedVisible = $false
     $script:autoHiddenForFocus = $false
+    $script:popupFocusGraceUntil = [DateTime]::MinValue
     $showItem.Text = "Show usage"
   }
   Write-Heartbeat

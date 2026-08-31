@@ -62,6 +62,7 @@ OpenCodex should be running before the tray starts. The tray reads the dashboard
 Administrator access is not required. The installer:
 
 - validates Node.js and `node:sqlite`;
+- records the absolute Node.js path for reboot-safe startup;
 - installs the app in `%LOCALAPPDATA%\OpenCodexUsageTray`;
 - creates an **OpenCodex Usage** Start menu shortcut;
 - creates a per-user Windows Startup shortcut that launches without a visible terminal; and
@@ -92,7 +93,7 @@ The default permanent view is a 316×62 compact strip. It shows only the active 
 | `×` or `Esc` | Hides the popup while leaving the tray running |
 | Tray icon, left-click | Shows or hides the popup |
 | Tray icon, right-click | Opens show, refresh, dashboard, popup-corner, and exit commands |
-| **OpenCodex Usage** in Start | Starts the tray or reveals the existing instance |
+| **OpenCodex Usage** in Start | Starts the tray or reveals the existing instance for at least 20 seconds |
 
 Account switching is not display-only: it changes the active account used by OpenCodex. The popup confirms the switch and then refreshes usage.
 
@@ -105,7 +106,7 @@ The **5-hour** and **Weekly** values both show percentage **used**, not percenta
 When the popup has been enabled:
 
 - focusing Codex shows it above the Codex window;
-- focusing another application hides it;
+- focusing another application hides it after any manual/startup reveal grace period;
 - returning to Codex restores it without taking focus from the editor or chat;
 - pressing the corner button, or choosing **Popup corner** from the tray menu, switches between top left and bottom left;
 - opening Codex Browser keeps a reserved area on the right so the popup does not cover the Browser panel; and
@@ -115,7 +116,7 @@ If you explicitly hide the popup with `×`, `Esc`, or the tray icon, it stays hi
 
 ## Start with Windows
 
-The installer adds `OpenCodex Usage Tray.lnk` to your per-user Startup folder. The compact strip starts enabled, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu stops it for the current session, but it starts again after the next Windows sign-in.
+The installer adds `OpenCodex Usage Tray.lnk` to your per-user Startup folder. The shortcut uses an invisible Windows Script Host launcher and the installed tray records the Node.js runtime path that passed validation. The compact strip starts enabled, shows briefly after sign-in even if Codex has not regained focus yet, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu stops it for the current session, but it starts again after the next Windows sign-in.
 
 To disable automatic startup without uninstalling:
 
@@ -158,6 +159,23 @@ Install or select Node.js 22 or newer, then rerun the installer.
 - Confirm `%USERPROFILE%\.opencodex\config.json` and `%USERPROFILE%\.opencodex\admin-api-token` exist.
 - If you use non-default locations, set `OPENCODEX_HOME` and `CODEX_HOME` before starting the tray.
 - Refresh from the tray menu after OpenCodex becomes available.
+
+### The tray does not appear after Windows sign-in
+
+- Start **OpenCodex Usage** from the Start menu; it reveals an existing tray instance if one is already running.
+- Check `%LOCALAPPDATA%\OpenCodexUsageTray\tray-startup-error.log` for a startup failure.
+- Re-run `install.ps1` after changing Node.js installations so the recorded runtime path is refreshed.
+
+### Codex is missing OpenCodex models after restart
+
+If Codex starts before OpenCodex refreshes its injected catalog, run:
+
+```powershell
+ocx sync
+ocx sync-cache
+```
+
+If `ocx` warns that a Codex app-server is still running, the disk catalog was updated but the selector can keep the old list until Codex is restarted.
 
 The provider reads the port from OpenCodex's local configuration and falls back to port `10100`.
 

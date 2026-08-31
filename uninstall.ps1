@@ -21,7 +21,9 @@ $allowedFiles = @(
   "Start-OpenCodexUsageTray.vbs",
   "OpenCodexUsage.ico",
   "README.md",
+  "runtime-config.json",
   "tray-heartbeat.json",
+  "tray-startup-error.log",
   "tray-settings.json"
 )
 

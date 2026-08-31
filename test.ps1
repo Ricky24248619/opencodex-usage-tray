@@ -38,6 +38,11 @@ foreach ($requiredUiMapping in @(
   '$fivePercent = $accountData.fiveHour.usedPercent',
   '$weekPercent = $accountData.week.usedPercent',
   '$refreshTimer.Interval = [TimeSpan]::FromSeconds(3)',
+  'runtime-config.json',
+  'Resolve-NodePath',
+  'tray-startup-error.log',
+  '$script:popupFocusGraceUntil = [DateTime]::MinValue',
+  '$script:popupFocusGraceUntil = [DateTime]::Now.AddSeconds(20)',
   'x:Name="CompactPanel"',
   'x:Name="ExpandButton"',
   'x:Name="CollapseButton"'
@@ -74,6 +79,30 @@ foreach ($requiredLauncherMapping in @(
 )) {
   if (-not $launcherText.Contains($requiredLauncherMapping)) {
     throw "Missing required invisible-launcher mapping: $requiredLauncherMapping"
+  }
+}
+
+$installPath = Join-Path $root "install.ps1"
+$installText = [System.IO.File]::ReadAllText($installPath)
+foreach ($requiredInstallMapping in @(
+  '"runtime-config.json"',
+  '"tray-startup-error.log"',
+  'nodePath = $node.Source',
+  '[System.IO.File]::WriteAllText('
+)) {
+  if (-not $installText.Contains($requiredInstallMapping)) {
+    throw "Missing required install mapping: $requiredInstallMapping"
+  }
+}
+
+$uninstallPath = Join-Path $root "uninstall.ps1"
+$uninstallText = [System.IO.File]::ReadAllText($uninstallPath)
+foreach ($requiredUninstallMapping in @(
+  '"runtime-config.json"',
+  '"tray-startup-error.log"'
+)) {
+  if (-not $uninstallText.Contains($requiredUninstallMapping)) {
+    throw "Missing required uninstall mapping: $requiredUninstallMapping"
   }
 }
 

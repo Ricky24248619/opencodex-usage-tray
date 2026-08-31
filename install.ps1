@@ -51,7 +51,9 @@ $allowedInstallFiles = @(
   "Start-OpenCodexUsageTray.vbs",
   "OpenCodexUsage.ico",
   "README.md",
+  "runtime-config.json",
   "tray-heartbeat.json",
+  "tray-startup-error.log",
   "tray-settings.json"
 )
 
@@ -127,6 +129,17 @@ if (Test-Path -LiteralPath $sourceIcon) {
 if (Test-Path -LiteralPath $sourceReadme) {
   Copy-Item -LiteralPath $sourceReadme -Destination (Join-Path $installRoot "README.md") -Force
 }
+$runtimeConfigPath = Join-Path $installRoot "runtime-config.json"
+$runtimeConfig = [ordered]@{
+  nodePath = $node.Source
+  powerShellPath = $powerShellPath
+  installedAt = [DateTimeOffset]::Now.ToString("o")
+}
+[System.IO.File]::WriteAllText(
+  $runtimeConfigPath,
+  ($runtimeConfig | ConvertTo-Json -Compress),
+  [System.Text.UTF8Encoding]::new($false)
+)
 
 $startupRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
 $programsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
