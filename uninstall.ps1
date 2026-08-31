@@ -18,6 +18,7 @@ $allowedFiles = @(
   "OpenCodexUsageTray.ps1",
   "OpenCodexUsageTray.WinForms.ps1",
   "status-provider.mjs",
+  "Start-OpenCodexUsageTray.vbs",
   "OpenCodexUsage.ico",
   "README.md",
   "tray-heartbeat.json",

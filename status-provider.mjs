@@ -154,6 +154,32 @@ function taskAccountFromModel(model, knownLabels) {
   return knownLabels.has(prefix) ? prefix : null;
 }
 
+function accountLogLabel(account, index = 0) {
+  const logLabel = typeof account?.logLabel === "string" ? account.logLabel.trim() : "";
+  if (logLabel) return logLabel;
+  const id = typeof account?.id === "string" ? account.id.trim() : "";
+  return id || `account-${index + 1}`;
+}
+
+export function resolveActiveAccount(accountsValue, activePayloadValue) {
+  const accounts = Array.isArray(accountsValue) ? accountsValue : [];
+  const requestedId = typeof activePayloadValue?.activeCodexAccountId === "string"
+    ? activePayloadValue.activeCodexAccountId.trim()
+    : "";
+  const activeAccount = (requestedId
+    ? accounts.find(account => String(account?.id) === requestedId)
+    : null)
+    || accounts.find(account => account?.isMain === true)
+    || accounts[0]
+    || null;
+  const activeIndex = activeAccount ? accounts.indexOf(activeAccount) : -1;
+  return {
+    activeAccount,
+    activeAccountId: activeAccount ? String(activeAccount.id) : (requestedId || null),
+    activeAccountLabel: activeAccount ? accountLogLabel(activeAccount, activeIndex) : null,
+  };
+}
+
 export function projectQuota(quotaValue) {
   const quota = quotaValue && typeof quotaValue === "object" ? quotaValue : {};
   const fiveHourPercent = Number.isFinite(quota.fiveHourPercent)
@@ -181,26 +207,22 @@ export function projectQuota(quotaValue) {
 function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const rawAccounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
-  const activeAccountId = typeof activePayload?.activeCodexAccountId === "string"
-    ? activePayload.activeCodexAccountId
-    : "__main__";
+  const {
+    activeAccountId,
+    activeAccount,
+    activeAccountLabel: activeLabel,
+  } = resolveActiveAccount(rawAccounts, activePayload);
   const accountLabels = new Set(
     rawAccounts
-      .map(account => String(account.logLabel || (account.isMain ? "main" : "")))
+      .map((account, index) => accountLogLabel(account, index))
       .filter(Boolean),
   );
   const accountIdByLabel = new Map(
-    rawAccounts.map(account => [
-      String(account.logLabel || (account.isMain ? "main" : "")),
+    rawAccounts.map((account, index) => [
+      accountLogLabel(account, index),
       String(account.id),
     ]),
   );
-  const activeAccount = rawAccounts.find(account => String(account.id) === activeAccountId)
-    || rawAccounts.find(account => account.isMain)
-    || null;
-  const activeLabel = activeAccount
-    ? String(activeAccount.logLabel || (activeAccount.isMain ? "main" : ""))
-    : "main";
 
   const usageByAccount = new Map();
   for (const row of Array.isArray(usagePayload?.accounts) ? usagePayload.accounts : []) {
@@ -275,7 +297,7 @@ function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload
   }
 
   const accounts = rawAccounts.map((account, index) => {
-    const label = String(account.logLabel || (account.isMain ? "main" : `account-${index + 1}`));
+    const label = accountLogLabel(account, index);
     const usage = usageByAccount.get(label) || {};
     const projectedQuota = projectQuota(account.quota);
     const alias = typeof account.alias === "string" && account.alias.trim() ? account.alias.trim() : null;
@@ -286,7 +308,7 @@ function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload
       alias,
       email: typeof account.email === "string" ? account.email : "",
       plan: typeof account.plan === "string" ? account.plan : "unknown",
-      active: String(account.id) === activeAccountId,
+      active: activeAccountId !== null && String(account.id) === activeAccountId,
       paused: account.paused === true,
       needsReauth: account.needsReauth === true,
       health: typeof account.healthLabel === "string" ? account.healthLabel : "unknown",
@@ -346,9 +368,7 @@ async function switchAccount(accountId) {
   const accounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
   const targetAccount = accounts.find(account => String(account.id) === accountId);
   if (!targetAccount) throw new Error("Unknown OpenCodex account");
-  const targetLabel = String(
-    targetAccount.logLabel || (targetAccount.isMain ? "main" : targetAccount.id),
-  );
+  const targetLabel = accountLogLabel(targetAccount, accounts.indexOf(targetAccount));
   await openCodexJson("/api/codex-auth/active", {
     method: "PUT",
     body: { accountId },

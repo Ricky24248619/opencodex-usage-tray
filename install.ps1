@@ -8,9 +8,10 @@ $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceApp = Join-Path $sourceRoot "OpenCodexUsageTray.ps1"
 $sourceLegacyApp = Join-Path $sourceRoot "OpenCodexUsageTray.WinForms.ps1"
 $sourceProvider = Join-Path $sourceRoot "status-provider.mjs"
+$sourceLauncher = Join-Path $sourceRoot "Start-OpenCodexUsageTray.vbs"
 $sourceIcon = Join-Path $sourceRoot "OpenCodexUsage.ico"
 $sourceReadme = Join-Path $sourceRoot "README.md"
-foreach ($requiredFile in @($sourceApp, $sourceProvider)) {
+foreach ($requiredFile in @($sourceApp, $sourceProvider, $sourceLauncher)) {
   if (-not [System.IO.File]::Exists($requiredFile)) {
     throw "Missing required file: $requiredFile"
   }
@@ -47,6 +48,7 @@ $allowedInstallFiles = @(
   "OpenCodexUsageTray.ps1",
   "OpenCodexUsageTray.WinForms.ps1",
   "status-provider.mjs",
+  "Start-OpenCodexUsageTray.vbs",
   "OpenCodexUsage.ico",
   "README.md",
   "tray-heartbeat.json",
@@ -118,6 +120,7 @@ if (Test-Path -LiteralPath $sourceLegacyApp) {
   Copy-Item -LiteralPath $sourceLegacyApp -Destination (Join-Path $installRoot "OpenCodexUsageTray.WinForms.ps1") -Force
 }
 Copy-Item -LiteralPath $sourceProvider -Destination (Join-Path $installRoot "status-provider.mjs") -Force
+Copy-Item -LiteralPath $sourceLauncher -Destination (Join-Path $installRoot "Start-OpenCodexUsageTray.vbs") -Force
 if (Test-Path -LiteralPath $sourceIcon) {
   Copy-Item -LiteralPath $sourceIcon -Destination (Join-Path $installRoot "OpenCodexUsage.ico") -Force
 }
@@ -129,6 +132,11 @@ $startupRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup
 $programsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
 $startupShortcutPath = Join-Path $startupRoot "OpenCodex Usage Tray.lnk"
 $startMenuShortcutPath = Join-Path $programsRoot "OpenCodex Usage.lnk"
+$installedLauncher = Join-Path $installRoot "Start-OpenCodexUsageTray.vbs"
+$wscriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+if (-not (Test-Path -LiteralPath $wscriptPath -PathType Leaf)) {
+  throw "Windows Script Host is unavailable"
+}
 $iconPath = Join-Path $installRoot "OpenCodexUsage.ico"
 if (-not (Test-Path -LiteralPath $iconPath)) {
   $iconPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".opencodex\opencodex-tray-online.ico"
@@ -136,23 +144,19 @@ if (-not (Test-Path -LiteralPath $iconPath)) {
 
 $shell = New-Object -ComObject WScript.Shell
 function Save-Shortcut {
-  param(
-    [string]$Path,
-    [bool]$ShowOnStart
-  )
+  param([string]$Path)
   $shortcut = $shell.CreateShortcut($Path)
-  $shortcut.TargetPath = $powerShellPath
-  $arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $installedApp + '"'
-  if ($ShowOnStart) { $arguments += ' -ShowOnStart' }
-  $shortcut.Arguments = $arguments
+  $shortcut.TargetPath = $wscriptPath
+  $shortcut.Arguments = '//B //NoLogo "' + $installedLauncher + '"'
   $shortcut.WorkingDirectory = $installRoot
+  $shortcut.WindowStyle = 7
   $shortcut.Description = "OpenCodex usage, tasks, quota windows, and account switcher"
   if (Test-Path -LiteralPath $iconPath) { $shortcut.IconLocation = "$iconPath,0" }
   $shortcut.Save()
 }
 
-Save-Shortcut $startupShortcutPath $true
-Save-Shortcut $startMenuShortcutPath $true
+Save-Shortcut $startupShortcutPath
+Save-Shortcut $startMenuShortcutPath
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
 
 $launchedPid = $null

@@ -64,7 +64,7 @@ Administrator access is not required. The installer:
 - validates Node.js and `node:sqlite`;
 - installs the app in `%LOCALAPPDATA%\OpenCodexUsageTray`;
 - creates an **OpenCodex Usage** Start menu shortcut;
-- creates a per-user Windows Startup shortcut; and
+- creates a per-user Windows Startup shortcut that launches without a visible terminal; and
 - launches the tray and checks that it reached a ready state.
 
 Use `-NoStart` to install without launching it immediately:
@@ -95,6 +95,8 @@ The default permanent view is a 316×62 compact strip. It shows only the active 
 | **OpenCodex Usage** in Start | Starts the tray or reveals the existing instance |
 
 Account switching is not display-only: it changes the active account used by OpenCodex. The popup confirms the switch and then refreshes usage.
+
+The tray checks local OpenCodex state every three seconds and resolves the active account from the live account ID. It does not assume that the primary account is named `__main__`, so usage follows whichever account is currently selected. Forced upstream quota refreshes remain limited to once every five minutes; use `↻` when an immediate upstream refresh is needed.
 
 The **5-hour** and **Weekly** values both show percentage **used**, not percentage remaining. Green is below 75% used, amber is 75–89%, and red is 90% or higher.
 
@@ -192,11 +194,12 @@ Treat the OpenCodex admin token as a credential. Do not publish it, copy it into
 | `OpenCodexUsageTray.ps1` | WPF popup, focus behavior, theme, and tray controls |
 | `OpenCodexUsageTray.WinForms.ps1` | Preserved legacy presentation for rollback and troubleshooting |
 | `status-provider.mjs` | Local OpenCodex and read-only Codex task data adapter |
-| `test-provider.mjs` | Asymmetric 5-hour/weekly quota mapping regression tests |
+| `Start-OpenCodexUsageTray.vbs` | Invisible Windows startup launcher |
+| `test-provider.mjs` | Quota mapping and dynamic active-account regression tests |
 | `install.ps1` | Safe per-user installation and shortcut creation |
 | `uninstall.ps1` | Safe removal of installed files and shortcuts |
 | `OpenCodexUsage.ico` | Application and notification-area icon |
-| `test.ps1` | Offline syntax, quota mapping, and documentation-asset validation |
+| `test.ps1` | Offline syntax, provider projection, refresh-cadence, and documentation-asset validation |
 
 There is no build step. To run directly from a checkout for development:
 

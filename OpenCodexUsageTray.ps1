@@ -1457,7 +1457,7 @@ $pollTimer.Add_Tick({
 })
 
 $refreshTimer = [System.Windows.Threading.DispatcherTimer]::new()
-$refreshTimer.Interval = [TimeSpan]::FromSeconds(30)
+$refreshTimer.Interval = [TimeSpan]::FromSeconds(3)
 $refreshTimer.Add_Tick({
   if ($null -ne $script:pendingProcess) { return }
   $force = ([DateTime]::Now - $script:lastForcedRefreshAt).TotalMinutes -ge 5

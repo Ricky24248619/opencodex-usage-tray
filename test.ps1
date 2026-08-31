@@ -37,6 +37,7 @@ foreach ($requiredUiMapping in @(
   '$compactWeekPercent = $activeAccount.week.usedPercent',
   '$fivePercent = $accountData.fiveHour.usedPercent',
   '$weekPercent = $accountData.week.usedPercent',
+  '$refreshTimer.Interval = [TimeSpan]::FromSeconds(3)',
   'x:Name="CompactPanel"',
   'x:Name="ExpandButton"',
   'x:Name="CollapseButton"'
@@ -59,7 +60,22 @@ if (-not (Test-Path -LiteralPath $providerTestPath -PathType Leaf)) {
   throw "Missing required file: test-provider.mjs"
 }
 & $node.Source $providerTestPath
-if ($LASTEXITCODE -ne 0) { throw "Quota projection tests failed" }
+if ($LASTEXITCODE -ne 0) { throw "Provider projection tests failed" }
+
+$launcherPath = Join-Path $root "Start-OpenCodexUsageTray.vbs"
+if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+  throw "Missing required file: Start-OpenCodexUsageTray.vbs"
+}
+$launcherText = [System.IO.File]::ReadAllText($launcherPath)
+foreach ($requiredLauncherMapping in @(
+  'WScript.Shell',
+  '-WindowStyle Hidden',
+  'shell.Run command, 0, False'
+)) {
+  if (-not $launcherText.Contains($requiredLauncherMapping)) {
+    throw "Missing required invisible-launcher mapping: $requiredLauncherMapping"
+  }
+}
 
 $documentationAssets = @("docs\hero.png", "docs\tray-compact.png", "docs\tray-light.png", "docs\tray-dark.png")
 foreach ($asset in $documentationAssets) {
