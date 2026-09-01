@@ -177,16 +177,25 @@ function Save-Shortcut {
   $shortcut.Save()
 }
 
-Save-Shortcut $startupShortcutPath
 Save-Shortcut $startMenuShortcutPath
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+
+$startupRunCommand = '"' + $wscriptPath + '" //B //NoLogo "' + $installedLauncher + '" supervise'
+New-Item -Path $startupRunPath -Force | Out-Null
+New-ItemProperty `
+  -Path $startupRunPath `
+  -Name $startupRunName `
+  -PropertyType String `
+  -Value $startupRunCommand `
+  -Force | Out-Null
+Remove-Item -LiteralPath $startupShortcutPath -Force -ErrorAction SilentlyContinue
 
 $launchedPid = $null
 $supervisorPid = $null
 $started = $false
 $connected = $false
 if (-not $NoStart) {
-  Start-Process -FilePath $startupShortcutPath
+  Start-Process -FilePath $startMenuShortcutPath
   $heartbeat = $null
   for ($attempt = 0; $attempt -lt 120; $attempt++) {
     if (Test-Path -LiteralPath $installedHeartbeat) {
@@ -216,8 +225,8 @@ if (-not $NoStart) {
 [pscustomobject]@{
   Installed = $true
   InstallRoot = $installRoot
-  RemovedLegacyStartupRunValue = "$startupRunPath\$startupRunName"
-  StartupShortcut = $startupShortcutPath
+  StartupRunValue = "$startupRunPath\$startupRunName"
+  RemovedLegacyStartupShortcut = $startupShortcutPath
   StartMenuShortcut = $startMenuShortcutPath
   Node = $node.Source
   PowerShell = $powerShellPath

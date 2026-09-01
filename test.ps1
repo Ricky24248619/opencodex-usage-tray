@@ -93,8 +93,9 @@ foreach ($requiredInstallMapping in @(
   '"tray-startup-error.log"',
   'nodePath = $node.Source',
   '[System.IO.File]::WriteAllText(',
-  'Save-Shortcut $startupShortcutPath',
-  'Start-Process -FilePath $startupShortcutPath',
+  '$startupRunCommand',
+  'New-ItemProperty',
+  'Start-Process -FilePath $startMenuShortcutPath',
   '" supervise',
   'Unregister-ScheduledTask -TaskName $scheduledTaskName'
 )) {

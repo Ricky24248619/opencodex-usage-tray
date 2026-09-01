@@ -65,7 +65,7 @@ Administrator access is not required. The installer:
 - records the absolute Node.js path for reboot-safe startup;
 - installs the app in `%LOCALAPPDATA%\OpenCodexUsageTray`;
 - creates an **OpenCodex Usage** Start menu shortcut;
-- creates a Startup shortcut that runs independently of Codex without a visible terminal; and
+- registers a per-user Windows sign-in launcher that runs independently of Codex without a visible terminal; and
 - launches the tray and checks that it reached a ready state.
 
 Use `-NoStart` to install without launching it immediately:
@@ -116,14 +116,15 @@ If you explicitly hide the popup with `×`, `Esc`, or the tray icon, it stays hi
 
 ## Start with Windows
 
-The installer adds an **OpenCodex Usage Tray** shortcut to the current user's Windows Startup folder. Its invisible Windows Script Host supervisor starts at every sign-in, runs independently of Codex, and relaunches the tray 30 seconds after a failure. The installed tray records the Node.js runtime path that passed validation. The compact strip starts enabled, shows briefly after sign-in even if Codex has not regained focus yet, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu returns success so the supervisor stops it for the current session, but it starts again after the next Windows sign-in.
+The installer registers **OpenCodexUsageTray** in the current user's Windows `Run` registry key. Its invisible Windows Script Host supervisor starts at every sign-in, runs independently of Codex, and relaunches the tray 30 seconds after a failure. The installed tray records the Node.js runtime path that passed validation. The compact strip starts enabled, shows briefly after sign-in even if Codex has not regained focus yet, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu returns success so the supervisor stops it for the current session, but it starts again after the next Windows sign-in.
 
 To disable automatic startup without uninstalling:
 
-1. Press `Win+R` and run `shell:startup`.
-2. Remove **OpenCodex Usage Tray** from that folder.
+1. Open **Registry Editor**.
+2. Go to `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
+3. Remove **OpenCodexUsageTray**.
 
-Run `install.ps1` again to recreate the shortcut.
+Run `install.ps1` again to recreate the startup value.
 
 ## Update
 
@@ -162,7 +163,7 @@ Install or select Node.js 22 or newer, then rerun the installer.
 ### The tray does not appear after Windows sign-in
 
 - Start **OpenCodex Usage** from the Start menu; it reveals an existing tray instance if one is already running.
-- Press `Win+R`, run `shell:startup`, and confirm **OpenCodex Usage Tray** exists.
+- In Registry Editor, confirm **OpenCodexUsageTray** exists under `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
 - Check `%LOCALAPPDATA%\OpenCodexUsageTray\tray-startup-error.log` for a startup failure.
 - Re-run `install.ps1` after changing Node.js installations so the recorded runtime path is refreshed.
 
@@ -214,7 +215,7 @@ Treat the OpenCodex admin token as a credential. Do not publish it, copy it into
 | `status-provider.mjs` | Local OpenCodex and read-only Codex task data adapter |
 | `Start-OpenCodexUsageTray.vbs` | Invisible Start menu launcher and crash-recovery supervisor |
 | `test-provider.mjs` | Quota mapping and dynamic active-account regression tests |
-| `install.ps1` | Safe per-user installation and shortcut creation |
+| `install.ps1` | Safe per-user installation, sign-in registration, and shortcut creation |
 | `uninstall.ps1` | Safe removal of installed files, shortcuts, and legacy startup entries |
 | `OpenCodexUsage.ico` | Application and notification-area icon |
 | `test.ps1` | Offline syntax, provider projection, refresh-cadence, and documentation-asset validation |
