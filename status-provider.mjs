@@ -37,7 +37,20 @@ function managementToken() {
   return token;
 }
 
+export function liveRuntimePort(runtime) {
+  if (!Number.isInteger(runtime?.pid) || runtime.pid <= 0
+    || !Number.isInteger(runtime.port) || runtime.port <= 0 || runtime.port > 65535) return null;
+  try { process.kill(runtime.pid, 0); }
+  catch { return null; }
+  return runtime.port;
+}
+
 function openCodexBaseUrl() {
+  try {
+    const runtime = JSON.parse(readFileSync(join(openCodexRoot, "runtime-port.json"), "utf8"));
+    const port = liveRuntimePort(runtime);
+    if (port !== null) return `http://127.0.0.1:${port}`;
+  } catch { }
   const config = readOpenCodexConfig();
   const parsedPort = Number(config.port);
   const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
@@ -326,6 +339,7 @@ function projectStatus(accountsPayload, activePayload, usagePayload, logsPayload
     : {};
   return {
     connected: true,
+    dashboardUrl: `${openCodexBaseUrl()}/`,
     generatedAt: Date.now(),
     openCodexGeneratedAt: Number(usagePayload?.generatedAt || 0) || null,
     activeAccountId,

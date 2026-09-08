@@ -60,6 +60,17 @@ public static class OpenCodexFocusNative {
 
   [DllImport("user32.dll")]
   [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindowVisible(IntPtr window);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsIconic(IntPtr window);
+
+  [DllImport("user32.dll")]
+  public static extern int GetWindowLong(IntPtr window, int index);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool GetWindowRect(IntPtr window, out OpenCodexWindowRect rect);
 
   [DllImport("user32.dll")]
@@ -821,7 +832,6 @@ $script:compactWidth = 316.0
 $script:expandedWidth = 428.0
 $script:popupRequestedVisible = $false
 $script:autoHiddenForFocus = $false
-$script:popupFocusGraceUntil = [DateTime]::MinValue
 $script:lastForegroundHandle = [IntPtr]::Zero
 $script:lastForegroundContext = "other"
 $script:lastCodexWindowHandle = [IntPtr]::Zero
@@ -836,10 +846,27 @@ function Sync-CodexTheme {
   if ($script:lastData) { Update-Interface $script:lastData }
 }
 
+function Test-CodexMainWindow {
+  param([IntPtr]$Handle)
+  if ($Handle -eq [IntPtr]::Zero -or
+      -not [OpenCodexFocusNative]::IsWindowVisible($Handle) -or
+      [OpenCodexFocusNative]::IsIconic($Handle)) { return $false }
+  # Codex's custom tray menu can become Process.MainWindowHandle; require the main frame's WS_CAPTION.
+  if (([OpenCodexFocusNative]::GetWindowLong($Handle, -16) -band 0x00C00000) -ne 0x00C00000) { return $false }
+  $windowProcessId = [uint32]0
+  [void][OpenCodexFocusNative]::GetWindowThreadProcessId($Handle, [ref]$windowProcessId)
+  try {
+    $process = Get-Process -Id ([int]$windowProcessId) -ErrorAction Stop
+    return $process.ProcessName -eq 'ChatGPT' -and
+      [string]$process.Path -like '*\OpenAI.Codex_*' -and
+      $process.MainWindowHandle -eq $Handle
+  } catch { return $false }
+}
+
 function Get-CodexWindowHandle {
   foreach ($process in @(Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })) {
     try {
-      if ([string]$process.Path -like "*\OpenAI.Codex_*") { return $process.MainWindowHandle }
+      if (Test-CodexMainWindow $process.MainWindowHandle) { return $process.MainWindowHandle }
     } catch { }
   }
   return [IntPtr]::Zero
@@ -847,25 +874,14 @@ function Get-CodexWindowHandle {
 
 function Get-ForegroundContext {
   $foregroundWindow = [OpenCodexFocusNative]::GetForegroundWindow()
-  if ($foregroundWindow -eq $script:lastForegroundHandle) { return $script:lastForegroundContext }
-
   $context = "other"
   if ($foregroundWindow -ne [IntPtr]::Zero) {
-    $foregroundProcessId = [uint32]0
-    [void][OpenCodexFocusNative]::GetWindowThreadProcessId($foregroundWindow, [ref]$foregroundProcessId)
-    if ($foregroundProcessId -eq [uint32]$PID) {
+    if ($foregroundWindow -eq $script:windowHandle -and $window.IsVisible -and
+        (Test-CodexMainWindow $script:lastCodexWindowHandle)) {
       $context = "popup"
-    } else {
-      try {
-        $foregroundProcess = Get-Process -Id ([int]$foregroundProcessId) -ErrorAction Stop
-        if (
-          $foregroundProcess.ProcessName -eq "ChatGPT" -and
-          [string]$foregroundProcess.Path -like "*\OpenAI.Codex_*"
-        ) {
-          $context = "codex"
-          $script:lastCodexWindowHandle = $foregroundWindow
-        }
-      } catch { }
+    } elseif (Test-CodexMainWindow $foregroundWindow) {
+      $context = "codex"
+      $script:lastCodexWindowHandle = $foregroundWindow
     }
   }
 
@@ -879,12 +895,10 @@ function Update-PopupFocusVisibility {
   if (-not $script:popupRequestedVisible) { return }
 
   if ($context -eq "other") {
-    if ([DateTime]::Now -lt $script:popupFocusGraceUntil) { return }
     if ($window.IsVisible) { Hide-Popup -ForFocus }
     return
   }
   if ($context -eq "codex") {
-    $script:popupFocusGraceUntil = [DateTime]::MinValue
     if (-not $window.IsVisible) {
       Show-Popup -ForFocusRestore -AnchorWindow $script:lastForegroundHandle
     } else {
@@ -906,7 +920,6 @@ function Write-Heartbeat {
       requestedVisible = $script:popupRequestedVisible
       autoHiddenForFocus = $script:autoHiddenForFocus
       foregroundContext = $script:lastForegroundContext
-      focusGraceUntil = if ([DateTime]::Now -lt $script:popupFocusGraceUntil) { [DateTimeOffset]::new($script:popupFocusGraceUntil).ToUnixTimeMilliseconds() } else { $null }
       popupCorner = $script:popupCorner
       expanded = $script:isExpanded
       activeAccount = if (-not [string]::IsNullOrWhiteSpace($script:confirmedActiveLabel)) { $script:confirmedActiveLabel } elseif ($script:lastData) { [string]$script:lastData.activeAccountLabel } else { $null }
@@ -1356,10 +1369,13 @@ function Show-Popup {
     [IntPtr]$AnchorWindow = [IntPtr]::Zero
   )
   $script:popupRequestedVisible = $true
-  $script:autoHiddenForFocus = $false
-  if (-not $ForFocusRestore) {
-    $script:popupFocusGraceUntil = [DateTime]::Now.AddSeconds(20)
+  $context = Get-ForegroundContext
+  if ($context -eq 'other') {
+    Hide-Popup -ForFocus
+    return
   }
+  $AnchorWindow = $script:lastCodexWindowHandle
+  $script:autoHiddenForFocus = $false
   Sync-CodexTheme
 
   if (-not $window.IsVisible) {
@@ -1387,7 +1403,6 @@ function Hide-Popup {
   } else {
     $script:popupRequestedVisible = $false
     $script:autoHiddenForFocus = $false
-    $script:popupFocusGraceUntil = [DateTime]::MinValue
     $showItem.Text = "Show usage"
   }
   Write-Heartbeat
@@ -1398,6 +1413,9 @@ function Toggle-Popup {
 }
 
 function Get-OpenCodexDashboardUrl {
+  if ($script:lastData -and [string]$script:lastData.dashboardUrl -match '^http://127\.0\.0\.1:\d+/$') {
+    return [string]$script:lastData.dashboardUrl
+  }
   $port = 10100
   $openCodexRoot = if (-not [string]::IsNullOrWhiteSpace($env:OPENCODEX_HOME)) {
     $env:OPENCODEX_HOME.Trim()

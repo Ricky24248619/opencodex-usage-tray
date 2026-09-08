@@ -41,8 +41,6 @@ foreach ($requiredUiMapping in @(
   'runtime-config.json',
   'Resolve-NodePath',
   'tray-startup-error.log',
-  '$script:popupFocusGraceUntil = [DateTime]::MinValue',
-  '$script:popupFocusGraceUntil = [DateTime]::Now.AddSeconds(20)',
   'x:Name="CompactPanel"',
   'x:Name="ExpandButton"',
   'x:Name="CollapseButton"'
@@ -66,6 +64,7 @@ if (-not (Test-Path -LiteralPath $providerTestPath -PathType Leaf)) {
 }
 & $node.Source $providerTestPath
 if ($LASTEXITCODE -ne 0) { throw "Provider projection tests failed" }
+& (Join-Path $root 'test-focus.ps1')
 
 $launcherPath = Join-Path $root "Start-OpenCodexUsageTray.vbs"
 if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
@@ -94,7 +93,9 @@ foreach ($requiredInstallMapping in @(
   'nodePath = $node.Source',
   '[System.IO.File]::WriteAllText(',
   '$startupRunCommand',
+  'Test-Path -LiteralPath $startupRunPath',
   'New-ItemProperty',
+  'Save-Shortcut $startupShortcutPath $wscriptPath $launcherArguments',
   'Start-Process -FilePath $startMenuShortcutPath',
   '" supervise',
   'Unregister-ScheduledTask -TaskName $scheduledTaskName'
@@ -102,6 +103,9 @@ foreach ($requiredInstallMapping in @(
   if (-not $installText.Contains($requiredInstallMapping)) {
     throw "Missing required install mapping: $requiredInstallMapping"
   }
+}
+if ($installText.Contains('New-Item -Path $startupRunPath -Force')) {
+  throw "The installer must not recreate the shared Windows Run key"
 }
 
 $uninstallPath = Join-Path $root "uninstall.ps1"

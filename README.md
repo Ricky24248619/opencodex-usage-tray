@@ -105,8 +105,8 @@ The **5-hour** and **Weekly** values both show percentage **used**, not percenta
 
 When the popup has been enabled:
 
-- focusing Codex shows it above the Codex window;
-- focusing another application hides it after any manual/startup reveal grace period;
+- focusing a visible, non-minimized Codex main window shows it above that window;
+- focusing another application, minimizing Codex, or opening Codex's notification-area menu hides it;
 - returning to Codex restores it without taking focus from the editor or chat;
 - pressing the corner button, or choosing **Popup corner** from the tray menu, switches between top left and bottom left;
 - opening Codex Browser keeps a reserved area on the right so the popup does not cover the Browser panel; and
@@ -116,15 +116,16 @@ If you explicitly hide the popup with `×`, `Esc`, or the tray icon, it stays hi
 
 ## Start with Windows
 
-The installer registers **OpenCodexUsageTray** in the current user's Windows `Run` registry key. Its invisible Windows Script Host supervisor starts at every sign-in, runs independently of Codex, and relaunches the tray 30 seconds after a failure. The installed tray records the Node.js runtime path that passed validation. The compact strip starts enabled, shows briefly after sign-in even if Codex has not regained focus yet, appears whenever Codex is focused, and hides while another app is focused. Exiting from the tray menu returns success so the supervisor stops it for the current session, but it starts again after the next Windows sign-in.
+The installer registers **OpenCodexUsageTray** in the current user's Windows `Run` registry key and Startup folder. Both entries use the hidden VBS supervisor, which retries failed launches after 30 seconds, independently of Codex. The tray's existing single-instance lock prevents duplicate windows. The installed tray records the Node.js runtime path that passed validation and follows OpenCodex's live runtime port when available. The compact strip starts enabled but stays hidden until a normal Codex window is active. Startup and manual show requests never display it outside Codex. Exiting from the tray menu stops it for the current session, but it starts again after the next Windows sign-in.
 
 To disable automatic startup without uninstalling:
 
-1. Open **Registry Editor**.
-2. Go to `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
-3. Remove **OpenCodexUsageTray**.
+1. Open **Registry Editor** and remove **OpenCodexUsageTray** from `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
+2. Open `shell:startup` and remove **OpenCodex Usage Tray**.
 
-Run `install.ps1` again to recreate the startup value.
+Run `install.ps1` again to recreate both startup entries.
+
+Run the installer from a normal Windows PowerShell window, outside the Microsoft Store Codex app. Codex's app-container virtualization can redirect the tray files and `Run` registry entry into private app storage, where Windows sign-in cannot use them. A launch from inside Codex alone does not verify sign-in startup.
 
 ## Update
 

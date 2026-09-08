@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { projectQuota, resolveActiveAccount } from "./status-provider.mjs";
+import { projectQuota, resolveActiveAccount, liveRuntimePort } from "./status-provider.mjs";
+
+assert.equal(liveRuntimePort({ pid: process.pid, port: 62607 }), 62607);
+for (const runtime of [null, {}, { pid: 0, port: 10100 }, { pid: process.pid, port: 65536 }, { pid: process.pid, port: "10100" }]) {
+  assert.equal(liveRuntimePort(runtime), null);
+}
 
 const nowSeconds = Math.floor(Date.now() / 1000);
 const asymmetric = projectQuota({

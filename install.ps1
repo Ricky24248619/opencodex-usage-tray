@@ -166,10 +166,10 @@ if (-not (Test-Path -LiteralPath $iconPath)) {
 
 $shell = New-Object -ComObject WScript.Shell
 function Save-Shortcut {
-  param([string]$Path)
+  param([string]$Path, [string]$TargetPath, [string]$Arguments)
   $shortcut = $shell.CreateShortcut($Path)
-  $shortcut.TargetPath = $wscriptPath
-  $shortcut.Arguments = '//B //NoLogo "' + $installedLauncher + '" supervise'
+  $shortcut.TargetPath = $TargetPath
+  $shortcut.Arguments = $Arguments
   $shortcut.WorkingDirectory = $installRoot
   $shortcut.WindowStyle = 7
   $shortcut.Description = "OpenCodex usage, tasks, quota windows, and account switcher"
@@ -177,18 +177,21 @@ function Save-Shortcut {
   $shortcut.Save()
 }
 
-Save-Shortcut $startMenuShortcutPath
+$launcherArguments = '//B //NoLogo "' + $installedLauncher + '" supervise'
+Save-Shortcut $startMenuShortcutPath $wscriptPath $launcherArguments
+Save-Shortcut $startupShortcutPath $wscriptPath $launcherArguments
 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
 
-$startupRunCommand = '"' + $wscriptPath + '" //B //NoLogo "' + $installedLauncher + '" supervise'
-New-Item -Path $startupRunPath -Force | Out-Null
+$startupRunCommand = '"' + $wscriptPath + '" ' + $launcherArguments
+if (-not (Test-Path -LiteralPath $startupRunPath)) {
+  New-Item -Path $startupRunPath | Out-Null
+}
 New-ItemProperty `
   -Path $startupRunPath `
   -Name $startupRunName `
   -PropertyType String `
   -Value $startupRunCommand `
   -Force | Out-Null
-Remove-Item -LiteralPath $startupShortcutPath -Force -ErrorAction SilentlyContinue
 
 $launchedPid = $null
 $supervisorPid = $null
@@ -226,7 +229,7 @@ if (-not $NoStart) {
   Installed = $true
   InstallRoot = $installRoot
   StartupRunValue = "$startupRunPath\$startupRunName"
-  RemovedLegacyStartupShortcut = $startupShortcutPath
+  StartupShortcut = $startupShortcutPath
   StartMenuShortcut = $startMenuShortcutPath
   Node = $node.Source
   PowerShell = $powerShellPath
