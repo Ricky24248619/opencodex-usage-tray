@@ -35,6 +35,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName UIAutomationClient
 
 if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne [System.Threading.ApartmentState]::STA) {
   throw "OpenCodex Usage Tray must run in an STA PowerShell process. Use Windows PowerShell or add -STA."
@@ -836,6 +837,9 @@ $script:lastForegroundHandle = [IntPtr]::Zero
 $script:lastForegroundContext = "other"
 $script:lastCodexWindowHandle = [IntPtr]::Zero
 $script:windowHandle = [IntPtr]::Zero
+$script:lastSidebarAnchor = [IntPtr]::Zero
+$script:lastSidebarProbeAt = [DateTime]::MinValue
+$script:lastSidebarRight = $null
 $heartbeatPath = Join-Path $scriptRoot "tray-heartbeat.json"
 
 function Sync-CodexTheme {
@@ -1275,6 +1279,37 @@ function Get-WindowScale {
   return 1.0
 }
 
+function Get-CodexSidebarRight {
+  param([IntPtr]$AnchorWindow, [OpenCodexWindowRect]$WindowRect)
+  if ($AnchorWindow -eq $script:lastSidebarAnchor -and
+      ([DateTime]::Now - $script:lastSidebarProbeAt).TotalMilliseconds -lt 500) {
+    return $script:lastSidebarRight
+  }
+
+  $script:lastSidebarAnchor = $AnchorWindow
+  $script:lastSidebarProbeAt = [DateTime]::Now
+  $script:lastSidebarRight = $null
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($AnchorWindow)
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Group
+    )
+    $groups = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $windowWidth = $WindowRect.Right - $WindowRect.Left
+    $windowHeight = $WindowRect.Bottom - $WindowRect.Top
+    foreach ($group in $groups) {
+      $bounds = $group.Current.BoundingRectangle
+      if ($bounds.Left -ge $WindowRect.Left -and $bounds.Left -le ($WindowRect.Left + 20) -and
+          $bounds.Width -ge 36 -and $bounds.Width -lt ($windowWidth * 0.7) -and
+          $bounds.Height -ge ($windowHeight * 0.7)) {
+        $script:lastSidebarRight = [Math]::Max([double]$script:lastSidebarRight, $bounds.Right)
+      }
+    }
+  } catch { }
+  return $script:lastSidebarRight
+}
+
 function Position-Popup {
   param([IntPtr]$AnchorWindow = [IntPtr]::Zero)
   if ($AnchorWindow -eq [IntPtr]::Zero) {
@@ -1304,17 +1339,11 @@ function Position-Popup {
       $anchorTop = $windowRect.Top / $scale
       $anchorRight = $windowRect.Right / $scale
       $anchorBottom = $windowRect.Bottom / $scale
-      $leftInset = 286
-      $rightReserve = 500
       $edgeGap = 12
       $topInset = 96
-      $leftX = $anchorLeft + $leftInset
-      $browserSafeMaxX = $anchorRight - $rightReserve - $popupWidth - $edgeGap
-      if ($browserSafeMaxX -ge ($anchorLeft + $edgeGap)) {
-        $x = [Math]::Min($leftX, $browserSafeMaxX)
-      } else {
-        $x = $anchorLeft + $edgeGap
-      }
+      $sidebarRight = Get-CodexSidebarRight $AnchorWindow $windowRect
+      $leftX = if ($null -ne $sidebarRight) { $sidebarRight / $scale + $edgeGap } else { $anchorLeft + 286 }
+      $x = [Math]::Min($leftX, $anchorRight - $popupWidth - $edgeGap)
       $y = if ($script:popupCorner -eq "TopLeft") { $anchorTop + $topInset } else { $anchorBottom - $popupHeight - $edgeGap }
     }
   }
