@@ -8,11 +8,12 @@ public static class OpenCodexFocusNative {
   public static IntPtr Foreground = IntPtr.Zero;
   public static bool Visible = true;
   public static bool Minimized = false;
+  public static int MainStyle = 0x14C70000;
   public static IntPtr GetForegroundWindow() { return Foreground; }
   public static bool IsWindowVisible(IntPtr h) { return Visible; }
   public static bool IsIconic(IntPtr h) { return Minimized; }
   public static uint GetWindowThreadProcessId(IntPtr h, out uint id) { id = h.ToInt64() == 4 ? 200u : 100u; return 0; }
-  public static int GetWindowLong(IntPtr h, int index) { return h.ToInt64() == 3 || h.ToInt64() == 5 ? unchecked((int)0x96000000) : 0x14C70000; }
+  public static int GetWindowLong(IntPtr h, int index) { return h.ToInt64() == 3 || h.ToInt64() == 5 ? unchecked((int)0x96000000) : MainStyle; }
   public static bool SetForegroundWindow(IntPtr h) { Foreground = h; return true; }
 }
 '@
@@ -56,6 +57,18 @@ Update-PopupFocusVisibility
 Assert-Visibility $true 'normal Codex window'
 Update-PopupFocusVisibility
 Assert-Visibility $true 'unchanged main-window focus'
+[OpenCodexFocusNative]::MainStyle = 0x15070000
+Update-PopupFocusVisibility
+Assert-Visibility $true 'maximized frameless Codex window after UI update'
+[OpenCodexFocusNative]::MainStyle = 0x14070000
+Update-PopupFocusVisibility
+Assert-Visibility $true 'restored frameless Codex window'
+[OpenCodexFocusNative]::MainStyle = 0x16000000
+Update-PopupFocusVisibility
+Assert-Visibility $false 'unframed non-resizable overlay reported as main window'
+[OpenCodexFocusNative]::MainStyle = 0x14C70000
+Update-PopupFocusVisibility
+Assert-Visibility $true 'traditional Codex frame restored'
 [OpenCodexFocusNative]::Foreground = [IntPtr]2
 Update-PopupFocusVisibility
 Assert-Visibility $true 'interacting with usage controls'

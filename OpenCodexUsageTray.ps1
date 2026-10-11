@@ -855,8 +855,10 @@ function Test-CodexMainWindow {
   if ($Handle -eq [IntPtr]::Zero -or
       -not [OpenCodexFocusNative]::IsWindowVisible($Handle) -or
       [OpenCodexFocusNative]::IsIconic($Handle)) { return $false }
-  # Codex's custom tray menu can become Process.MainWindowHandle; require the main frame's WS_CAPTION.
-  if (([OpenCodexFocusNative]::GetWindowLong($Handle, -16) -band 0x00C00000) -ne 0x00C00000) { return $false }
+  # Frameless Codex windows retain WS_THICKFRAME; tray menus have neither frame style.
+  $style = [OpenCodexFocusNative]::GetWindowLong($Handle, -16)
+  if (($style -band 0x00C00000) -ne 0x00C00000 -and
+      ($style -band 0x00040000) -eq 0) { return $false }
   $windowProcessId = [uint32]0
   [void][OpenCodexFocusNative]::GetWindowThreadProcessId($Handle, [ref]$windowProcessId)
   try {
